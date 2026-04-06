@@ -1,0 +1,23 @@
+{
+  "title": "Word Practice",
+  "items": [
+    {
+      "displayText": "កាន",
+      "steps": [
+        { "keyId": "K" },
+        { "keyId": "A" },
+        { "keyId": "N" }
+      ]
+    },
+    {
+      "displayText": "ជិះ",
+      "steps": [
+        { "keyId": "LeftShift" },
+        { "keyId": "C" },
+        { "keyId": "I" },
+        { "keyId": "LeftShift" },
+        { "keyId": "H" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+﻿<Window x:Class="lamat.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:lamat"
+        mc:Ignorable="d"
+        Title="Jarai Typing Trainer" Height="450" Width="800">
+    <Grid Margin="20">
+        <StackPanel>
+            <TextBlock 
+                Text="Jarai Typing Trainer!" 
+                FontSize="24" 
+                Margin="0, 0, 0, 20"
+            />
+            <TextBlock
+                x:Name="ProgressText"
+                FontSize="16"
+                Margin="0, 0, 0, 20" 
+            />
+            <TextBlock
+                x:Name="TargetText"
+                FontSize="16"
+                Margin="0, 0, 0, 20" 
+            />
+            <TextBlock
+                Text="Expected Key:"
+                FontSize="16"
+                Margin="0, 0, 0, 20"
+             />
+            <TextBox
+                x:Name="ExpectedKeyText"
+                FontSize="24"
+                Margin="0, 0, 0, 20"
+                Height="40" 
+            />
+            
+            <Border 
+                BorderBrush="Gray"
+                BorderThickness="1"
+                Height="160"
+                Margin="0, 0, 0 20"
+            >
+                <TextBlock
+                    x:Name="KeyboardHintText"
+                    FontSize="22"
+                    FontWeight="Bold"
+                    Foreground="Red"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                />
+            </Border>
+            
+            <TextBlock
+                x:Name="StatusText"
+                FontSize="16"
+                Margin="0,20,0,0" 
+            />
+        </StackPanel>
+    </Grid>
+</Window>
