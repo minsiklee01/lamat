@@ -1,18 +1,3 @@
-{
-  "title": "Key Practice",
-  "items": [
-    {
-      "displayText": "A",
-      "steps": [
-        { "keyId": "A" }
-      ]
-    },
-    {
-      "displayText": "Shift + A",
-      "steps": [
-        { "keyId": "LeftShift" },
-        { "keyId": "A" }
-      ]
-    }
-  ]
-}
+ខ្ញុំ ចង់ ញ៉ាំ បាយ
+គាត់ ទៅ សាលា រៀន
+ម៉ាក់ ធ្វើ ការ នៅ ផ្សារ

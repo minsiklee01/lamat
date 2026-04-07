@@ -47,6 +47,12 @@ namespace lamat.Services
             CurrentStepIndex++;
         }
 
+        public void RevertStep()
+        {
+            if (CurrentStepIndex > 0)
+                CurrentStepIndex--;
+        }
+
         public void AdvanceItem()
         {
             CurrentItemIndex++;

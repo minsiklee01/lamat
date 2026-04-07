@@ -46,6 +46,11 @@ namespace lamat.Services
         {
             return CurrentWordIndex >= _currentWords.Length;
         }
+        public void AdvanceWord()
+        {
+            CurrentWordIndex++;
+        }
+
         public void AdvanceSentence()
         {
             CurrentSentenceIndex++;
