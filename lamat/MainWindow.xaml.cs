@@ -13,32 +13,26 @@ namespace lamat
     {
         private readonly PracticeDataLoader _loader = new();
 
-        // Key/Word practice
         private readonly KeySequenceSessionService _keySessionService = new();
         private readonly InputSequenceEvaluator _keyEvaluator = new();
         private readonly KeyboardHintService _keyboardHintService = new();
+        private readonly JaraiLayoutService _jaraiLayoutService = new();
 
-        // Sentence practice
         private readonly SentenceSessionService _sentenceSessionService = new();
         private readonly SentenceEvaluator _sentenceEvaluator = new();
 
         private PracticeModeType _currentMode = PracticeModeType.WordPractice;
         private bool _isAdvancing = false;
 
-        // Tracks the modifier key accepted in the previous step (e.g. "LeftShift")
         private string? _heldModifier = null;
-
-        // Accumulates display characters for the current word
         private readonly List<string> _displayHistory = new();
-
-        // Set when a non-modifier key is accepted in PreviewKeyDown, consumed in PreviewTextInput
         private bool _pendingDisplayUpdate = false;
 
         public MainWindow()
         {
             InitializeComponent();
             LoadAllData();
-            SwitchMode(PracticeModeType.WordPractice);
+            JaraiKeyboard.Initialize(_jaraiLayoutService);
         }
 
         private void LoadAllData()
@@ -50,6 +44,8 @@ namespace lamat
 
             var sentenceSet = _loader.LoadSentencePracticeSet(Path.Combine(basePath, "Data", "sentence-practice.json"));
             _sentenceSessionService.LoadItem(sentenceSet.Items);
+
+            _jaraiLayoutService.Load(Path.Combine(basePath, "Data", "jarai-keyboard-layout.json"));
         }
 
         private void LoadWordPractice()
@@ -59,6 +55,16 @@ namespace lamat
             _keySessionService.LoadItems(set.Items);
         }
 
+        private void ShowHome()
+        {
+            HomePanel.Visibility = Visibility.Visible;
+            PracticePanel.Visibility = Visibility.Collapsed;
+            _isAdvancing = false;
+            _heldModifier = null;
+            _pendingDisplayUpdate = false;
+            _displayHistory.Clear();
+        }
+
         private void SwitchMode(PracticeModeType mode)
         {
             _currentMode = mode;
@@ -66,8 +72,15 @@ namespace lamat
             _heldModifier = null;
             _pendingDisplayUpdate = false;
             _displayHistory.Clear();
+            ActualKeyText.Text = "";
+            ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush");
+            StatusText.Text = "";
+            JaraiKeyboard.SetHighlights([]);
 
-            bool isSentence = mode == PracticeModeType.SentencePRactice;
+            HomePanel.Visibility = Visibility.Collapsed;
+            PracticePanel.Visibility = Visibility.Visible;
+
+            bool isSentence = mode == PracticeModeType.SentencePractice;
             KeySequencePanel.Visibility = isSentence ? Visibility.Collapsed : Visibility.Visible;
             SentencePanel.Visibility = isSentence ? Visibility.Visible : Visibility.Collapsed;
 
@@ -82,7 +95,7 @@ namespace lamat
 
         private void RefreshUI()
         {
-            if (_currentMode == PracticeModeType.SentencePRactice)
+            if (_currentMode == PracticeModeType.SentencePractice)
                 RefreshSentenceUI();
             else
                 RefreshKeySequenceUI();
@@ -98,17 +111,17 @@ namespace lamat
                 TargetText.Text = "Practice complete!";
                 ProgressText.Text = "";
                 ExpectedKeyText.Text = "";
-                KeyboardHintText.Text = "";
                 ActualKeyText.Text = "";
                 StatusText.Text = "All items finished.";
+                JaraiKeyboard.SetHighlights([]);
                 return;
             }
 
             TargetText.Text = currentItem.DisplayText;
             ProgressText.Text = $"{_keySessionService.CurrentItemIndex + 1} / {_keySessionService.TotalItemCount}";
             ExpectedKeyText.Text = _keyboardHintService.GetHintText(currentStep, _heldModifier != null);
-            KeyboardHintText.Text = _keyboardHintService.GetHintText(currentStep, _heldModifier != null);
             StatusText.Text = "";
+            JaraiKeyboard.SetHighlights(_keyboardHintService.GetKeysToHighlight(currentStep, _heldModifier));
         }
 
         private void RefreshSentenceUI()
@@ -129,10 +142,9 @@ namespace lamat
             StatusText.Text = "";
         }
 
-        // Key/Word practice input
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
-            if (_currentMode == PracticeModeType.SentencePRactice) return;
+            if (_currentMode == PracticeModeType.SentencePractice) return;
             if (_isAdvancing) return;
 
             var currentItem = _keySessionService.GetCurrentItem();
@@ -146,24 +158,22 @@ namespace lamat
 
             if (result == KeyInputResult.WrongStep)
             {
-                ActualKeyText.Foreground = System.Windows.Media.Brushes.Red;
-                StatusText.Text = "Wrong key";
+                ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("ErrorBrush");
+                StatusText.Text = $"Expected: {currentStep.KeyId}  ·  pressed: {actualKeyId}";
                 e.Handled = true;
                 return;
             }
 
             StatusText.Text = "";
-            ActualKeyText.Foreground = System.Windows.Media.Brushes.Green;
+            ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("SuccessBrush");
 
             if (ModifierKeyIds.IsModifier(actualKeyId))
             {
                 _heldModifier = actualKeyId;
-                // Don't add to display — the combined character from the next key will represent this
             }
             else
             {
                 _heldModifier = null;
-                // Wait for PreviewTextInput to get the Jarai character
                 _pendingDisplayUpdate = true;
             }
 
@@ -171,15 +181,15 @@ namespace lamat
             {
                 _keySessionService.AdvanceStep();
                 RefreshUI();
-                // Don't mark handled — let PreviewTextInput fire to get the Jarai character
             }
             else if (result == KeyInputResult.ItemCompleted)
             {
                 _heldModifier = null;
-                _pendingDisplayUpdate = false; // skip PreviewTextInput — word is done
+                _pendingDisplayUpdate = false;
                 _isAdvancing = true;
                 _displayHistory.Clear();
                 ActualKeyText.Text = "";
+                ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush");
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _keySessionService.AdvanceItem();
@@ -189,10 +199,9 @@ namespace lamat
             }
         }
 
-        // If the user releases a modifier before pressing the next key, revert to that modifier step
         private void Window_KeyUp(object sender, KeyEventArgs e)
         {
-            if (_currentMode == PracticeModeType.SentencePRactice) return;
+            if (_currentMode == PracticeModeType.SentencePractice) return;
             if (_heldModifier == null) return;
 
             string released = ConvertKeyUpToKeyId(e);
@@ -205,10 +214,9 @@ namespace lamat
             }
         }
 
-        // Captures the Keyman-converted Jarai character and appends it to the display
         private void Window_TextInput(object sender, TextCompositionEventArgs e)
         {
-            if (_currentMode == PracticeModeType.SentencePRactice) return;
+            if (_currentMode == PracticeModeType.SentencePractice) return;
             if (!_pendingDisplayUpdate) return;
 
             _pendingDisplayUpdate = false;
@@ -216,7 +224,6 @@ namespace lamat
             ActualKeyText.Text = string.Join("", _displayHistory);
         }
 
-        // Sentence practice input
         private void SentenceInput_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key != Key.Space && e.Key != Key.Return) return;
@@ -267,7 +274,11 @@ namespace lamat
             return key.ToString();
         }
 
-        // Mode button handlers
+        private void HomeBtn_Click(object sender, RoutedEventArgs e)
+        {
+            ShowHome();
+        }
+
         private void WordPracticeBtn_Click(object sender, RoutedEventArgs e)
         {
             LoadWordPractice();
@@ -276,7 +287,7 @@ namespace lamat
 
         private void SentencePracticeBtn_Click(object sender, RoutedEventArgs e)
         {
-            SwitchMode(PracticeModeType.SentencePRactice);
+            SwitchMode(PracticeModeType.SentencePractice);
         }
     }
 }

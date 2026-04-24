@@ -8,6 +8,6 @@ namespace lamat.Models
     {
         KeyPractice,
         WordPractice,
-        SentencePRactice,
+        SentencePractice,
     }
 }
