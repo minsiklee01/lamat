@@ -4,7 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Windows;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace lamat
@@ -27,6 +29,12 @@ namespace lamat
         private string? _heldModifier = null;
         private readonly List<string> _displayHistory = new();
         private bool _pendingDisplayUpdate = false;
+
+        private string _sentenceBuffer = "";
+        private string _typedWordsDisplay = "";
+        private readonly List<string> _submittedWords = new();
+        private List<bool?> _wordResults = new();
+        private bool _sentenceFailed = false;
 
         public MainWindow()
         {
@@ -63,6 +71,11 @@ namespace lamat
             _heldModifier = null;
             _pendingDisplayUpdate = false;
             _displayHistory.Clear();
+            _sentenceBuffer = "";
+            _typedWordsDisplay = "";
+            _submittedWords.Clear();
+            _wordResults.Clear();
+            _sentenceFailed = false;
         }
 
         private void SwitchMode(PracticeModeType mode)
@@ -86,8 +99,13 @@ namespace lamat
 
             if (isSentence)
             {
-                SentenceInput.Clear();
-                SentenceInput.Focus();
+                _typedWordsDisplay = "";
+                _submittedWords.Clear();
+                _sentenceFailed = false;
+                SentenceInputDisplay.Text = "";
+                InitWordResults();
+                SentenceInputBox.Clear();
+                Dispatcher.BeginInvoke(new Action(() => SentenceInputBox.Focus()), DispatcherPriority.Input);
             }
 
             RefreshUI();
@@ -136,15 +154,62 @@ namespace lamat
                 return;
             }
 
-            string targetWord = _sentenceSessionService.GetCurrentTargetWord() ?? "";
-            TargetText.Text = sentence.DisplayText;
-            ProgressText.Text = $"Sentence {_sentenceSessionService.CurrentSentenceIndex + 1} / {_sentenceSessionService.TotalSentenceCount}  |  Word: {targetWord}";
+            var words = sentence.DisplayText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            int currentIdx = _sentenceSessionService.CurrentWordIndex;
+
+            TargetText.Inlines.Clear();
+            for (int i = 0; i < words.Length; i++)
+            {
+                if (i > 0) TargetText.Inlines.Add(new Run(" "));
+
+                Brush fg;
+                if (i < _wordResults.Count && _wordResults[i] == true)
+                    fg = (Brush)FindResource("SuccessBrush");
+                else if (i < _wordResults.Count && _wordResults[i] == false)
+                    fg = (Brush)FindResource("ErrorBrush");
+                else if (i == currentIdx)
+                    fg = (Brush)FindResource("AccentBrush");
+                else
+                    fg = (Brush)FindResource("TextBrush");
+
+                TargetText.Inlines.Add(new Run(words[i]) { Foreground = fg });
+            }
+
+            ProgressText.Text = $"Sentence {_sentenceSessionService.CurrentSentenceIndex + 1} / {_sentenceSessionService.TotalSentenceCount}";
             StatusText.Text = "";
+        }
+
+        private void InitWordResults()
+        {
+            var sentence = _sentenceSessionService.GetCurrentSentence();
+            int count = sentence?.DisplayText.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length ?? 0;
+            _wordResults = new List<bool?>(new bool?[count]);
         }
 
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
-            if (_currentMode == PracticeModeType.SentencePractice) return;
+            if (_currentMode == PracticeModeType.SentencePractice)
+            {
+                Key k = e.Key switch
+                {
+                    Key.System      => e.SystemKey,
+                    Key.ImeProcessed => e.ImeProcessedKey,
+                    _ => e.Key
+                };
+                if (k == Key.Space || k == Key.Return)
+                {
+                    AdvanceSentenceWord();
+                    e.Handled = true;
+                }
+                else if (k == Key.Back && !_sentenceFailed
+                         && SentenceInputBox.Text.Length == 0
+                         && _submittedWords.Count > 0)
+                {
+                    RevertLastWord();
+                    e.Handled = true;
+                }
+                return;
+            }
             if (_isAdvancing) return;
 
             var currentItem = _keySessionService.GetCurrentItem();
@@ -216,40 +281,121 @@ namespace lamat
 
         private void Window_TextInput(object sender, TextCompositionEventArgs e)
         {
-            if (_currentMode == PracticeModeType.SentencePractice) return;
+            if (_currentMode == PracticeModeType.SentencePractice)
+            {
+                if (e.Text == " " || e.Text == "\r" || e.Text == "\n")
+                    e.Handled = true;
+                return;
+            }
             if (!_pendingDisplayUpdate) return;
 
             _pendingDisplayUpdate = false;
+
+            if (!IsJaraiCharacter(e.Text))
+            {
+                _keySessionService.RevertStep();
+                ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush");
+                RefreshKeySequenceUI();
+                StatusText.Text = "Switch to Jarai keyboard (Keyman) to continue";
+                return;
+            }
+
             _displayHistory.Add(e.Text);
             ActualKeyText.Text = string.Join("", _displayHistory);
         }
 
-        private void SentenceInput_KeyDown(object sender, KeyEventArgs e)
+        private void SentenceInputBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
-            if (e.Key != Key.Space && e.Key != Key.Return) return;
+            if (!_sentenceFailed)
+                SentenceInputDisplay.Text = _typedWordsDisplay + SentenceInputBox.Text;
+        }
 
-            string input = SentenceInput.Text.Trim();
+        private static string RemoveLastTextElement(string text)
+        {
+            var info = new System.Globalization.StringInfo(text);
+            int len = info.LengthInTextElements;
+            return len <= 1 ? "" : info.SubstringByTextElements(0, len - 1);
+        }
+
+        private static bool IsJaraiCharacter(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return true;
+            char c = text[0];
+            return c >= 'ក' && c <= '៿';
+        }
+
+        private void AdvanceSentenceWord()
+        {
+            // After a failed attempt, the next Space resets for retry
+            if (_sentenceFailed)
+            {
+                _sentenceFailed = false;
+                _sentenceSessionService.ResetWordIndex();
+                _typedWordsDisplay = "";
+                _submittedWords.Clear();
+                SentenceInputBox.Clear();
+                SentenceInputDisplay.Text = "";
+                InitWordResults();
+                RefreshSentenceUI();
+                return;
+            }
+
+            string input = SentenceInputBox.Text.Trim();
             if (string.IsNullOrEmpty(input)) return;
 
+            int wordIndex = _sentenceSessionService.CurrentWordIndex;
             string targetWord = _sentenceSessionService.GetCurrentTargetWord() ?? "";
+            bool correct = _sentenceEvaluator.IsWordMatch(input, targetWord);
 
-            if (_sentenceEvaluator.IsWordMatch(input, targetWord))
+            _wordResults[wordIndex] = correct;
+            _submittedWords.Add(input);
+            _typedWordsDisplay += input + " ";
+            SentenceInputBox.Clear();
+
+            _sentenceSessionService.AdvanceWord();
+
+            if (_sentenceSessionService.IsCurrentSentenceCompleted())
             {
-                SentenceInput.Clear();
-                _sentenceSessionService.AdvanceWord();
-
-                if (_sentenceSessionService.IsCurrentSentenceCompleted())
+                bool allCorrect = _wordResults.TrueForAll(r => r == true);
+                if (allCorrect)
+                {
                     _sentenceSessionService.AdvanceSentence();
-
-                RefreshSentenceUI();
-                StatusText.Text = "";
+                    _typedWordsDisplay = "";
+                    _submittedWords.Clear();
+                    SentenceInputBox.Clear();
+                    SentenceInputDisplay.Text = "";
+                    InitWordResults();
+                    RefreshSentenceUI();
+                }
+                else
+                {
+                    _sentenceFailed = true;
+                    RefreshSentenceUI();
+                    StatusText.Text = "Some words incorrect — press Space to try again";
+                }
             }
             else
             {
-                StatusText.Text = $"Wrong — expected: {targetWord}";
+                RefreshSentenceUI();
             }
+        }
 
-            e.Handled = true;
+        private void RevertLastWord()
+        {
+            string lastWord = _submittedWords[^1];
+            _submittedWords.RemoveAt(_submittedWords.Count - 1);
+
+            _sentenceSessionService.RevertWord();
+            _wordResults[_sentenceSessionService.CurrentWordIndex] = null;
+
+            _typedWordsDisplay = _submittedWords.Count > 0
+                ? string.Join(" ", _submittedWords) + " "
+                : "";
+
+            SentenceInputBox.Text = lastWord;
+            SentenceInputBox.CaretIndex = lastWord.Length;
+
+            RefreshSentenceUI();
         }
 
         private string ConvertKeyEventToKeyId(KeyEventArgs e)
@@ -260,6 +406,7 @@ namespace lamat
                 Key.ImeProcessed => e.ImeProcessedKey,
                 _ => e.Key
             };
+            if (key == Key.ImeProcessed || key == Key.None) return "";
             return key.ToString();
         }
 

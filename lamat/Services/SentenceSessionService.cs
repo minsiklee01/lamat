@@ -56,6 +56,17 @@ namespace lamat.Services
             CurrentSentenceIndex++;
             LoadCurrentSentenceWords();
         }
+
+        public void ResetWordIndex()
+        {
+            CurrentWordIndex = 0;
+        }
+
+        public void RevertWord()
+        {
+            if (CurrentWordIndex > 0)
+                CurrentWordIndex--;
+        }
         public bool HasMoreSentences()
         {
             return CurrentSentenceIndex < _items.Count;

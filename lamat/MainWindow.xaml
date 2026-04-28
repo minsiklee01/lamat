@@ -132,16 +132,30 @@
 
                 <!-- ── Sentence practice section ── -->
                 <StackPanel x:Name="SentencePanel" Visibility="Collapsed">
-                    <TextBlock Text="Type the highlighted word and press Space to advance"
+                    <TextBlock Text="Type each word and press Space to advance"
                                FontFamily="Segoe UI"
                                FontSize="13"
                                Foreground="{StaticResource MutedBrush}"
                                HorizontalAlignment="Center"
                                Margin="0,0,0,12"/>
-                    <TextBox x:Name="SentenceInput"
-                             FontSize="20"
-                             Height="52"
-                             KeyDown="SentenceInput_KeyDown"/>
+                    <Border Background="{StaticResource Surface2Brush}"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="2"
+                            CornerRadius="8"
+                            Padding="20,10"
+                            HorizontalAlignment="Center"
+                            MinWidth="240">
+                        <TextBlock x:Name="SentenceInputDisplay"
+                                   FontFamily="Segoe UI"
+                                   FontSize="22"
+                                   Foreground="{StaticResource TextBrush}"
+                                   HorizontalAlignment="Center"/>
+                    </Border>
+                    <!-- Invisible TextBox: gives Keyman a focused text control to output into -->
+                    <TextBox x:Name="SentenceInputBox"
+                             Width="1" Height="1" Opacity="0"
+                             IsTabStop="False"
+                             TextChanged="SentenceInputBox_TextChanged"/>
                 </StackPanel>
 
                 <!-- Status / feedback -->
