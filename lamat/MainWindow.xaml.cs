@@ -1,5 +1,6 @@
 using lamat.Models;
 using lamat.Services;
+using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -24,6 +25,7 @@ namespace lamat
         private readonly SentenceEvaluator _sentenceEvaluator = new();
 
         private PracticeModeType _currentMode = PracticeModeType.WordPractice;
+        private PracticeModeType _fileSelectMode = PracticeModeType.WordPractice;
         private bool _isAdvancing = false;
 
         private string? _heldModifier = null;
@@ -66,6 +68,7 @@ namespace lamat
         private void ShowHome()
         {
             HomePanel.Visibility = Visibility.Visible;
+            FileSelectPanel.Visibility = Visibility.Collapsed;
             PracticePanel.Visibility = Visibility.Collapsed;
             _isAdvancing = false;
             _heldModifier = null;
@@ -91,6 +94,7 @@ namespace lamat
             JaraiKeyboard.SetHighlights([]);
 
             HomePanel.Visibility = Visibility.Collapsed;
+            FileSelectPanel.Visibility = Visibility.Collapsed;
             PracticePanel.Visibility = Visibility.Visible;
 
             bool isSentence = mode == PracticeModeType.SentencePractice;
@@ -428,13 +432,114 @@ namespace lamat
 
         private void WordPracticeBtn_Click(object sender, RoutedEventArgs e)
         {
-            LoadWordPractice();
-            SwitchMode(PracticeModeType.WordPractice);
+            ShowFileSelector(PracticeModeType.WordPractice);
         }
 
         private void SentencePracticeBtn_Click(object sender, RoutedEventArgs e)
         {
-            SwitchMode(PracticeModeType.SentencePractice);
+            ShowFileSelector(PracticeModeType.SentencePractice);
+        }
+
+        private void ShowFileSelector(PracticeModeType mode)
+        {
+            _fileSelectMode = mode;
+            HomePanel.Visibility = Visibility.Collapsed;
+            FileSelectPanel.Visibility = Visibility.Visible;
+
+            FileSelectTitle.Text = mode == PracticeModeType.WordPractice
+                ? "Word Practice" : "Sentence Practice";
+
+            FileListPanel.Children.Clear();
+
+            string basePath = AppDomain.CurrentDomain.BaseDirectory;
+
+            if (mode == PracticeModeType.WordPractice)
+            {
+                AddFileButton("Practice 1", () =>
+                {
+                    LoadWordPractice();
+                    SwitchMode(PracticeModeType.WordPractice);
+                });
+                AddFileButton("Practice 2", () =>
+                {
+                    var set = _loader.LoadWordPracticeFromTextFile(
+                        Path.Combine(basePath, "Data", "word-practice-sample.txt"),
+                        _jaraiLayoutService);
+                    _keySessionService.LoadItems(set.Items);
+                    SwitchMode(PracticeModeType.WordPractice);
+                });
+            }
+            else
+            {
+                AddFileButton("Practice 1", () =>
+                {
+                    var set = _loader.LoadSentencePracticeSet(
+                        Path.Combine(basePath, "Data", "sentence-practice.json"));
+                    _sentenceSessionService.LoadItem(set.Items);
+                    SwitchMode(PracticeModeType.SentencePractice);
+                });
+                AddFileButton("Practice 2", () =>
+                {
+                    var set = _loader.LoadSentencePracticeFromTextFile(
+                        Path.Combine(basePath, "Data", "sentence-practice-sample.txt"));
+                    _sentenceSessionService.LoadItem(set.Items);
+                    SwitchMode(PracticeModeType.SentencePractice);
+                });
+            }
+        }
+
+        private void AddFileButton(string name, Action onClick)
+        {
+            var btn = new System.Windows.Controls.Button
+            {
+                Content = name,
+                Height = 48,
+                FontSize = 15,
+                Margin = new System.Windows.Thickness(0, 0, 0, 10)
+            };
+            btn.Click += (_, _) => onClick();
+            FileListPanel.Children.Add(btn);
+        }
+
+        private void FileSelectBackBtn_Click(object sender, RoutedEventArgs e)
+        {
+            FileSelectPanel.Visibility = Visibility.Collapsed;
+            HomePanel.Visibility = Visibility.Visible;
+        }
+
+        private void FileSelectCustomBtn_Click(object sender, RoutedEventArgs e)
+        {
+            var dlg = new OpenFileDialog
+            {
+                Title = "Load Practice File",
+                Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*"
+            };
+            if (dlg.ShowDialog() != true) return;
+
+            if (_fileSelectMode == PracticeModeType.WordPractice)
+            {
+                var set = _loader.LoadWordPracticeFromTextFile(dlg.FileName, _jaraiLayoutService);
+                if (set.Items.Count == 0)
+                {
+                    MessageBox.Show("No valid words found in the file.\n\nMake sure the file contains Jarai words.",
+                        "Load Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                _keySessionService.LoadItems(set.Items);
+                SwitchMode(PracticeModeType.WordPractice);
+            }
+            else
+            {
+                var set = _loader.LoadSentencePracticeFromTextFile(dlg.FileName);
+                if (set.Items.Count == 0)
+                {
+                    MessageBox.Show("No sentences found in the file.\n\nMake sure the file contains one sentence per line.",
+                        "Load Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                _sentenceSessionService.LoadItem(set.Items);
+                SwitchMode(PracticeModeType.SentencePractice);
+            }
         }
     }
 }

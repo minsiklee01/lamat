@@ -53,6 +53,51 @@
             </Border>
         </Grid>
 
+        <!-- ══════════════════════ File Selector ══════════════════════ -->
+        <Grid x:Name="FileSelectPanel" Visibility="Collapsed">
+            <Border Background="{StaticResource SurfaceBrush}"
+                    CornerRadius="20"
+                    Padding="56,44"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Width="380">
+                <Border.Effect>
+                    <DropShadowEffect Color="#000000" Opacity="0.35"
+                                      BlurRadius="32" ShadowDepth="0"/>
+                </Border.Effect>
+                <StackPanel>
+                    <Grid Margin="0,0,0,20">
+                        <Button Content="← Back"
+                                Style="{StaticResource GhostButton}"
+                                HorizontalAlignment="Left"
+                                Click="FileSelectBackBtn_Click"/>
+                    </Grid>
+                    <TextBlock x:Name="FileSelectTitle"
+                               FontFamily="Segoe UI"
+                               FontSize="22"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource TextBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,6"/>
+                    <TextBlock Text="Choose a practice set"
+                               FontFamily="Segoe UI"
+                               FontSize="13"
+                               Foreground="{StaticResource MutedBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,24"/>
+                    <StackPanel x:Name="FileListPanel"/>
+                    <Border Height="1"
+                            Background="{StaticResource BorderBrush}"
+                            Margin="0,8,0,16"/>
+                    <Button Content="Load custom file (.txt)…"
+                            Style="{StaticResource GhostButton}"
+                            Height="44"
+                            FontSize="14"
+                            Click="FileSelectCustomBtn_Click"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+
         <!-- ══════════════════════ Practice Shell ══════════════════════ -->
         <Grid x:Name="PracticePanel" Visibility="Collapsed">
             <StackPanel Margin="48,32,48,32">

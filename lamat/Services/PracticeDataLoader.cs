@@ -50,5 +50,39 @@ namespace lamat.Services
 
             return set;
         }
+
+        // Reads Jarai words from a text file; splits each line by spaces so multi-word lines
+        // each become individual practice items. Skips tokens with unmappable characters.
+        public PracticeSet<KeySequencePracticeItem> LoadWordPracticeFromTextFile(
+            string path, JaraiLayoutService layout)
+        {
+            var set = new PracticeSet<KeySequencePracticeItem>();
+            if (!File.Exists(path)) return set;
+
+            foreach (var line in File.ReadAllLines(path))
+            {
+                var tokens = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                foreach (var token in tokens)
+                {
+                    var word = token.Trim();
+                    if (string.IsNullOrWhiteSpace(word)) continue;
+
+                    var steps = layout.DeriveKeySteps(word);
+                    if (steps == null) continue; // skip unmappable tokens
+
+                    set.Items.Add(new KeySequencePracticeItem
+                    {
+                        DisplayText = word,
+                        Steps = steps
+                    });
+                }
+            }
+
+            return set;
+        }
+
+        // Reads one sentence per line from a plain-text file.
+        public PracticeSet<SentencePracticeItem> LoadSentencePracticeFromTextFile(string path)
+            => LoadSentencePracticeSet(path); // same format — reuse existing logic
     }
 }
