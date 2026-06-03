@@ -111,6 +111,11 @@ namespace lamat
                 SentenceInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => SentenceInputBox.Focus()), DispatcherPriority.Input);
             }
+            else
+            {
+                WordPracticeInputBox.Clear();
+                Dispatcher.BeginInvoke(new Action(() => WordPracticeInputBox.Focus()), DispatcherPriority.Input);
+            }
 
             RefreshUI();
         }
@@ -294,6 +299,7 @@ namespace lamat
             if (!_pendingDisplayUpdate) return;
 
             _pendingDisplayUpdate = false;
+            e.Handled = true; // Prevent character from accumulating in WordPracticeInputBox
 
             if (!IsJaraiCharacter(e.Text))
             {

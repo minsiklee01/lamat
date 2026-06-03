@@ -21,8 +21,9 @@ The app starts at a **home screen** (`HomePanel`) and navigates into a **practic
 - User presses keys one at a time; evaluated against the expected sequence
 - Shift is a separate step: user must hold Shift while pressing the next key; releasing Shift early reverts to the Shift step
 - Uses `PreviewKeyDown` (not `KeyDown`) to capture physical keys before Keyman/IME processes them
-- "Your Input" field shows Keyman-converted Jarai characters via `PreviewTextInput`
+- "Your Input" field shows Keyman-converted Jarai characters via `PreviewTextInput`; `e.Handled = true` is set there to prevent the character reaching `WordPracticeInputBox`
 - If a non-Jarai (ASCII) character is received via `PreviewTextInput`, the step is reverted and a "Switch to Jarai keyboard" warning is shown
+- An invisible 1×1 `TextBox` (`WordPracticeInputBox`) holds keyboard focus so Keyman's TSF context activates for the window; without it Keyman ignores keystrokes until a focus cycle occurs
 - A `JaraiKeyboardControl` renders the full keyboard with Jarai characters on each key and highlights the key(s) to press
 
 ### Sentence Practice (active)
@@ -115,7 +116,7 @@ Global styles defined for `Button` (accent, rounded), `GhostButton` (keyed style
 - `PreviewTextInput` captures the Keyman-converted Jarai character; for word practice this drives the "Your Input" display
 - Modifier steps skip `PreviewTextInput` (they produce no character output)
 - `e.Handled = true` in `PreviewKeyDown` can suppress the following `PreviewTextInput` — only set it when actually consuming the key (wrong key presses, Space/Enter submission); do **not** set it unconditionally for Backspace or it will block Keyman's composition output
-- Sentence practice requires a focused `TextBox` for Keyman to output characters; a `TextBlock` alone is insufficient — `SentenceInputBox` (invisible) exists solely to satisfy this requirement
+- **Both modes require a focused `TextBox` for Keyman to work.** Keyman is a TSF (Text Services Framework) input method; WPF only activates a TSF edit context when a TextBox (or similar IME-aware element) is focused. Without one, Keyman's conversion pipeline is dormant and all keystrokes are silently dropped. `WordPracticeInputBox` and `SentenceInputBox` exist solely for this purpose — do not remove them.
 - `ConvertKeyEventToKeyId` unwraps `Key.ImeProcessed` → `e.ImeProcessedKey` and filters out residual `Key.ImeProcessed` / `Key.None` results to avoid ghost error messages on focus re-entry
 
 ## Build & Run
