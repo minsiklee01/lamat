@@ -1,3 +1,4 @@
+using lamat.Controls;
 using lamat.Models;
 using lamat.Services;
 using Microsoft.Win32;
@@ -37,6 +38,13 @@ namespace lamat
         private readonly List<string> _submittedWords = new();
         private List<bool?> _wordResults = new();
         private bool _sentenceFailed = false;
+
+        private string[] _positionGroupKeys = [];
+        private string _positionGroupName = "";
+        private string _positionTargetKey = "";
+        private string? _positionErrorKey = null;
+        private int _positionCorrect = 0;
+        private readonly Random _rng = new();
 
         public MainWindow()
         {
@@ -98,8 +106,11 @@ namespace lamat
             PracticePanel.Visibility = Visibility.Visible;
 
             bool isSentence = mode == PracticeModeType.SentencePractice;
-            KeySequencePanel.Visibility = isSentence ? Visibility.Collapsed : Visibility.Visible;
-            SentencePanel.Visibility = isSentence ? Visibility.Visible : Visibility.Collapsed;
+            bool isPosition = mode == PracticeModeType.PositionPractice;
+            KeySequencePanel.Visibility = (!isSentence && !isPosition) ? Visibility.Visible : Visibility.Collapsed;
+            SentencePanel.Visibility    = isSentence ? Visibility.Visible : Visibility.Collapsed;
+            PositionPanel.Visibility    = isPosition ? Visibility.Visible : Visibility.Collapsed;
+            JaraiKeyboard.Visibility    = !isSentence ? Visibility.Visible : Visibility.Collapsed;
 
             if (isSentence)
             {
@@ -110,6 +121,14 @@ namespace lamat
                 InitWordResults();
                 SentenceInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => SentenceInputBox.Focus()), DispatcherPriority.Input);
+            }
+            else if (isPosition)
+            {
+                _positionCorrect = 0;
+                _positionErrorKey = null;
+                PickNextPositionKey();
+                PositionInputBox.Clear();
+                Dispatcher.BeginInvoke(new Action(() => PositionInputBox.Focus()), DispatcherPriority.Input);
             }
             else
             {
@@ -124,8 +143,28 @@ namespace lamat
         {
             if (_currentMode == PracticeModeType.SentencePractice)
                 RefreshSentenceUI();
+            else if (_currentMode == PracticeModeType.PositionPractice)
+                RefreshPositionUI();
             else
                 RefreshKeySequenceUI();
+        }
+
+        private void RefreshPositionUI()
+        {
+            TargetText.Text = _jaraiLayoutService.GetNormalLabel(_positionTargetKey);
+            ProgressText.Text = $"{_positionGroupName}  ·  {_positionCorrect} correct";
+            JaraiKeyboard.SetHighlights([_positionTargetKey], _positionErrorKey);
+        }
+
+        private void PickNextPositionKey()
+        {
+            if (_positionGroupKeys.Length == 0) return;
+            if (_positionGroupKeys.Length == 1) { _positionTargetKey = _positionGroupKeys[0]; return; }
+            string prev = _positionTargetKey;
+            string next;
+            do { next = _positionGroupKeys[_rng.Next(_positionGroupKeys.Length)]; }
+            while (next == prev);
+            _positionTargetKey = next;
         }
 
         private void RefreshKeySequenceUI()
@@ -219,6 +258,27 @@ namespace lamat
                 }
                 return;
             }
+            if (_currentMode == PracticeModeType.PositionPractice)
+            {
+                string keyId = ConvertKeyEventToKeyId(e);
+                if (string.IsNullOrEmpty(keyId) || ModifierKeyIds.IsModifier(keyId)) return;
+                e.Handled = true;
+                if (keyId == _positionTargetKey)
+                {
+                    _positionCorrect++;
+                    _positionErrorKey = null;
+                    StatusText.Text = "";
+                    PickNextPositionKey();
+                }
+                else
+                {
+                    _positionErrorKey = keyId;
+                    StatusText.Text = $"Wrong — target is {Controls.JaraiKeyboardControl.EnglishLabel(_positionTargetKey).ToUpperInvariant()}";
+                }
+                RefreshPositionUI();
+                return;
+            }
+
             if (_isAdvancing) return;
 
             var currentItem = _keySessionService.GetCurrentItem();
@@ -276,6 +336,7 @@ namespace lamat
         private void Window_KeyUp(object sender, KeyEventArgs e)
         {
             if (_currentMode == PracticeModeType.SentencePractice) return;
+            if (_currentMode == PracticeModeType.PositionPractice) return;
             if (_heldModifier == null) return;
 
             string released = ConvertKeyUpToKeyId(e);
@@ -436,6 +497,11 @@ namespace lamat
             ShowHome();
         }
 
+        private void PositionPracticeBtn_Click(object sender, RoutedEventArgs e)
+        {
+            ShowFileSelector(PracticeModeType.PositionPractice);
+        }
+
         private void WordPracticeBtn_Click(object sender, RoutedEventArgs e)
         {
             ShowFileSelector(PracticeModeType.WordPractice);
@@ -452,14 +518,34 @@ namespace lamat
             HomePanel.Visibility = Visibility.Collapsed;
             FileSelectPanel.Visibility = Visibility.Visible;
 
-            FileSelectTitle.Text = mode == PracticeModeType.WordPractice
-                ? "Word Practice" : "Sentence Practice";
+            FileSelectTitle.Text = mode switch
+            {
+                PracticeModeType.WordPractice     => "Word Practice",
+                PracticeModeType.SentencePractice => "Sentence Practice",
+                _                                 => "Position Practice",
+            };
+
+            FileSelectCustomSection.Visibility = mode == PracticeModeType.PositionPractice
+                ? Visibility.Collapsed : Visibility.Visible;
 
             FileListPanel.Children.Clear();
 
             string basePath = AppDomain.CurrentDomain.BaseDirectory;
 
-            if (mode == PracticeModeType.WordPractice)
+            if (mode == PracticeModeType.PositionPractice)
+            {
+                foreach (var group in KeyPositionGroups.All)
+                {
+                    var g = group;
+                    AddFileButton(g.Name, () =>
+                    {
+                        _positionGroupKeys = g.KeyIds;
+                        _positionGroupName = g.Name;
+                        SwitchMode(PracticeModeType.PositionPractice);
+                    });
+                }
+            }
+            else if (mode == PracticeModeType.WordPractice)
             {
                 AddFileButton("Practice 1", () =>
                 {

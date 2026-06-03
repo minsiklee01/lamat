@@ -38,6 +38,12 @@
                                Foreground="{StaticResource MutedBrush}"
                                HorizontalAlignment="Center"
                                Margin="0,0,0,36"/>
+                    <Button Content="Position Practice"
+                            Height="52"
+                            FontSize="16"
+                            FontWeight="SemiBold"
+                            Margin="0,0,0,12"
+                            Click="PositionPracticeBtn_Click"/>
                     <Button Content="Word Practice"
                             Height="52"
                             FontSize="16"
@@ -86,14 +92,16 @@
                                HorizontalAlignment="Center"
                                Margin="0,0,0,24"/>
                     <StackPanel x:Name="FileListPanel"/>
-                    <Border Height="1"
-                            Background="{StaticResource BorderBrush}"
-                            Margin="0,8,0,16"/>
-                    <Button Content="Load custom file (.txt)…"
-                            Style="{StaticResource GhostButton}"
-                            Height="44"
-                            FontSize="14"
-                            Click="FileSelectCustomBtn_Click"/>
+                    <StackPanel x:Name="FileSelectCustomSection">
+                        <Border Height="1"
+                                Background="{StaticResource BorderBrush}"
+                                Margin="0,8,0,16"/>
+                        <Button Content="Load custom file (.txt)…"
+                                Style="{StaticResource GhostButton}"
+                                Height="44"
+                                FontSize="14"
+                                Click="FileSelectCustomBtn_Click"/>
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </Grid>
@@ -168,11 +176,6 @@
                                HorizontalAlignment="Center"
                                Margin="0,0,0,4"/>
 
-                    <!-- Visual keyboard -->
-                    <controls:JaraiKeyboardControl x:Name="JaraiKeyboard"
-                                                   Margin="0,20,0,0"
-                                                   HorizontalAlignment="Center"/>
-
                     <!-- Invisible TextBox: gives Keyman's TSF context a focused input target -->
                     <TextBox x:Name="WordPracticeInputBox"
                              Width="1" Height="1" Opacity="0"
@@ -207,6 +210,26 @@
                              IsTabStop="False"
                              TextChanged="SentenceInputBox_TextChanged"/>
                 </StackPanel>
+
+                <!-- ── Position practice section ── -->
+                <StackPanel x:Name="PositionPanel" Visibility="Collapsed">
+                    <TextBlock Text="FIND THIS KEY ON THE KEYBOARD"
+                               FontFamily="Segoe UI"
+                               FontSize="11"
+                               FontWeight="Bold"
+                               Foreground="{StaticResource MutedBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,20"/>
+                    <!-- Invisible TextBox: gives Keyman's TSF context a focused input target -->
+                    <TextBox x:Name="PositionInputBox"
+                             Width="1" Height="1" Opacity="0"
+                             IsTabStop="False"/>
+                </StackPanel>
+
+                <!-- Shared visual keyboard (word practice + position practice) -->
+                <controls:JaraiKeyboardControl x:Name="JaraiKeyboard"
+                                               Margin="0,20,0,0"
+                                               HorizontalAlignment="Center"/>
 
                 <!-- Status / feedback -->
                 <TextBlock x:Name="StatusText"

@@ -9,5 +9,6 @@ namespace lamat.Models
         KeyPractice,
         WordPractice,
         SentencePractice,
+        PositionPractice,
     }
 }

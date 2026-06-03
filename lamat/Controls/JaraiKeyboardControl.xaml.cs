@@ -132,24 +132,29 @@ namespace lamat.Controls
             }, mainLabel);
         }
 
-        public void SetHighlights(string[] keyIds)
+        public void SetHighlights(string[] keyIds, string? errorKeyId = null)
         {
             var on = new HashSet<string>(keyIds);
             foreach (var (keyId, border) in _keyBorders)
             {
                 bool lit     = on.Contains(keyId);
+                bool isError = !lit && keyId == errorKeyId;
                 bool special = _specials.Contains(keyId);
 
                 border.Background = lit
                     ? (Brush)FindResource("AccentBrush")
-                    : special
-                        ? (Brush)FindResource("SurfaceBrush")
-                        : (Brush)FindResource("Surface2Brush");
+                    : isError
+                        ? (Brush)FindResource("ErrorBrush")
+                        : special
+                            ? (Brush)FindResource("SurfaceBrush")
+                            : (Brush)FindResource("Surface2Brush");
 
-                border.BorderBrush    = lit ? (Brush)FindResource("AccentHoverBrush") : (Brush)FindResource("BorderBrush");
-                border.BorderThickness = new Thickness(lit ? 2 : 1.5);
+                border.BorderBrush = (lit || isError)
+                    ? (Brush)FindResource(lit ? "AccentHoverBrush" : "ErrorBrush")
+                    : (Brush)FindResource("BorderBrush");
+                border.BorderThickness = new Thickness((lit || isError) ? 2 : 1.5);
 
-                _keyLabels[keyId].Foreground = lit
+                _keyLabels[keyId].Foreground = (lit || isError)
                     ? Brushes.White
                     : special
                         ? (Brush)FindResource("MutedBrush")
@@ -178,7 +183,7 @@ namespace lamat.Controls
             _          => "Shift"
         };
 
-        private static string EnglishLabel(string keyId) => keyId switch
+        internal static string EnglishLabel(string keyId) => keyId switch
         {
             "D1" => "1", "D2" => "2", "D3" => "3", "D4" => "4", "D5" => "5",
             "D6" => "6", "D7" => "7", "D8" => "8", "D9" => "9", "D0" => "0",
