@@ -8,6 +8,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -40,17 +41,36 @@ namespace lamat
         private bool _sentenceFailed = false;
 
         private string[] _positionGroupKeys = [];
+        private HashSet<string> _positionGroupKeySet = new(StringComparer.OrdinalIgnoreCase);
         private string _positionGroupName = "";
         private string _positionTargetKey = "";
         private string? _positionErrorKey = null;
         private int _positionCorrect = 0;
         private readonly Random _rng = new();
 
+        // Raw Win32 VK fallback: when Keyman reports Key.ImeProcessed + ImeProcessedKey=None,
+        // we recover the physical key from the most recent WM_KEYDOWN wParam.
+        private int _lastRawVirtualKey;
+
         public MainWindow()
         {
             InitializeComponent();
             LoadAllData();
             JaraiKeyboard.Initialize(_jaraiLayoutService);
+            Loaded += (_, _) =>
+            {
+                HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)
+                          ?.AddHook(WndProc);
+            };
+        }
+
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_KEYDOWN = 0x0100;
+            const int WM_SYSKEYDOWN = 0x0104;
+            if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+                _lastRawVirtualKey = (int)wParam;
+            return IntPtr.Zero;
         }
 
         private void LoadAllData()
@@ -126,6 +146,7 @@ namespace lamat
             {
                 _positionCorrect = 0;
                 _positionErrorKey = null;
+                _positionGroupKeySet = new HashSet<string>(_positionGroupKeys, StringComparer.OrdinalIgnoreCase);
                 PickNextPositionKey();
                 PositionInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => PositionInputBox.Focus()), DispatcherPriority.Input);
@@ -263,7 +284,9 @@ namespace lamat
                 string keyId = ConvertKeyEventToKeyId(e);
                 if (string.IsNullOrEmpty(keyId) || ModifierKeyIds.IsModifier(keyId)) return;
                 e.Handled = true;
-                if (keyId == _positionTargetKey)
+                // Ignore keys outside the group (e.g. Keyman synthetic Back after composing a character)
+                if (!_positionGroupKeySet.Contains(keyId)) return;
+                if (string.Equals(keyId, _positionTargetKey, StringComparison.OrdinalIgnoreCase))
                 {
                     _positionCorrect++;
                     _positionErrorKey = null;
@@ -273,7 +296,9 @@ namespace lamat
                 else
                 {
                     _positionErrorKey = keyId;
-                    StatusText.Text = $"Wrong — target is {Controls.JaraiKeyboardControl.EnglishLabel(_positionTargetKey).ToUpperInvariant()}";
+                    string pressed = JaraiKeyboardControl.EnglishLabel(keyId).ToUpperInvariant();
+                    string target  = JaraiKeyboardControl.EnglishLabel(_positionTargetKey).ToUpperInvariant();
+                    StatusText.Text = $"Wrong — pressed {pressed}, target is {target}";
                 }
                 RefreshPositionUI();
                 return;
@@ -477,6 +502,9 @@ namespace lamat
                 Key.ImeProcessed => e.ImeProcessedKey,
                 _ => e.Key
             };
+            // When Keyman reports ImeProcessed+None, fall back to the raw VK captured in WndProc.
+            if (key == Key.None && _lastRawVirtualKey != 0)
+                key = KeyInterop.KeyFromVirtualKey(_lastRawVirtualKey);
             if (key == Key.ImeProcessed || key == Key.None) return "";
             return key.ToString();
         }
