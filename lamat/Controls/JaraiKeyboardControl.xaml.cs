@@ -132,29 +132,35 @@ namespace lamat.Controls
             }, mainLabel);
         }
 
-        public void SetHighlights(string[] keyIds, string? errorKeyId = null)
+        // shiftKey: key ID to paint in amber (needed) or green (held), for Shift visual feedback.
+        public void SetHighlights(string[] keyIds, string? errorKeyId = null,
+                                  string? shiftKey = null, bool shiftHeld = false)
         {
             var on = new HashSet<string>(keyIds);
             foreach (var (keyId, border) in _keyBorders)
             {
                 bool lit     = on.Contains(keyId);
                 bool isError = !lit && keyId == errorKeyId;
+                bool isShift = !lit && !isError && keyId == shiftKey;
                 bool special = _specials.Contains(keyId);
 
                 border.Background = lit
                     ? (Brush)FindResource("AccentBrush")
                     : isError
                         ? (Brush)FindResource("ErrorBrush")
-                        : special
-                            ? (Brush)FindResource("SurfaceBrush")
-                            : (Brush)FindResource("Surface2Brush");
+                        : isShift
+                            ? (Brush)FindResource(shiftHeld ? "SuccessBrush" : "WarningBrush")
+                            : special
+                                ? (Brush)FindResource("SurfaceBrush")
+                                : (Brush)FindResource("Surface2Brush");
 
-                border.BorderBrush = (lit || isError)
-                    ? (Brush)FindResource(lit ? "AccentHoverBrush" : "ErrorBrush")
+                border.BorderBrush = (lit || isError || isShift)
+                    ? (Brush)FindResource(lit ? "AccentHoverBrush" : isError ? "ErrorBrush"
+                        : shiftHeld ? "SuccessBrush" : "WarningBrush")
                     : (Brush)FindResource("BorderBrush");
-                border.BorderThickness = new Thickness((lit || isError) ? 2 : 1.5);
+                border.BorderThickness = new Thickness((lit || isError || isShift) ? 2 : 1.5);
 
-                _keyLabels[keyId].Foreground = (lit || isError)
+                _keyLabels[keyId].Foreground = (lit || isError || isShift)
                     ? Brushes.White
                     : special
                         ? (Brush)FindResource("MutedBrush")

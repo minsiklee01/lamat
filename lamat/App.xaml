@@ -17,6 +17,7 @@
         <SolidColorBrush x:Key="MutedBrush"       Color="#6b7280"/>
         <SolidColorBrush x:Key="ErrorBrush"       Color="#f87171"/>
         <SolidColorBrush x:Key="SuccessBrush"     Color="#4ade80"/>
+        <SolidColorBrush x:Key="WarningBrush"     Color="#f59e0b"/>
 
         <!-- Primary button -->
         <Style TargetType="Button">

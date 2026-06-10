@@ -58,6 +58,15 @@ namespace lamat.Services
             return steps;
         }
 
+        public bool TryGetKeyForChar(string chars, out string keyId, out bool shifted)
+        {
+            if (_reverseMap.TryGetValue(chars, out var m))
+            {
+                keyId = m.KeyId; shifted = m.IsShifted; return true;
+            }
+            keyId = ""; shifted = false; return false;
+        }
+
         private void BuildReverseMap()
         {
             _reverseMap.Clear();

@@ -17,39 +17,40 @@ namespace lamat
     public partial class MainWindow : Window
     {
         private readonly PracticeDataLoader _loader = new();
-
         private readonly KeySequenceSessionService _keySessionService = new();
-        private readonly InputSequenceEvaluator _keyEvaluator = new();
-        private readonly KeyboardHintService _keyboardHintService = new();
         private readonly JaraiLayoutService _jaraiLayoutService = new();
-
         private readonly SentenceSessionService _sentenceSessionService = new();
         private readonly SentenceEvaluator _sentenceEvaluator = new();
 
         private PracticeModeType _currentMode = PracticeModeType.WordPractice;
         private PracticeModeType _fileSelectMode = PracticeModeType.WordPractice;
         private bool _isAdvancing = false;
+        private bool _shiftHeld = false;
 
-        private string? _heldModifier = null;
+        // Word practice — character-based sequence derived from steps at load time
         private readonly List<string> _displayHistory = new();
-        private bool _pendingDisplayUpdate = false;
+        private List<(string Chars, string KeyId, bool IsShifted)> _wordCharSeq = new();
+        private int _wordCharIdx = 0;
+        private bool _wordHasError = false;
 
-        private string _sentenceBuffer = "";
+        // Sentence practice
         private string _typedWordsDisplay = "";
         private readonly List<string> _submittedWords = new();
         private List<bool?> _wordResults = new();
         private bool _sentenceFailed = false;
 
+        // Position practice
         private string[] _positionGroupKeys = [];
-        private HashSet<string> _positionGroupKeySet = new(StringComparer.OrdinalIgnoreCase);
         private string _positionGroupName = "";
         private string _positionTargetKey = "";
+        private bool _positionTargetShifted = false;
+        private string _positionTargetChar = "";
         private string? _positionErrorKey = null;
         private int _positionCorrect = 0;
         private readonly Random _rng = new();
 
         // Raw Win32 VK fallback: when Keyman reports Key.ImeProcessed + ImeProcessedKey=None,
-        // we recover the physical key from the most recent WM_KEYDOWN wParam.
+        // recover the physical key from the most recent WM_KEYDOWN wParam.
         private int _lastRawVirtualKey;
 
         public MainWindow()
@@ -76,13 +77,10 @@ namespace lamat
         private void LoadAllData()
         {
             string basePath = AppDomain.CurrentDomain.BaseDirectory;
-
             var wordSet = _loader.LoadKeySequencePracticeSet(Path.Combine(basePath, "Data", "word-practice.json"));
             _keySessionService.LoadItems(wordSet.Items);
-
             var sentenceSet = _loader.LoadSentencePracticeSet(Path.Combine(basePath, "Data", "sentence-practice.json"));
             _sentenceSessionService.LoadItem(sentenceSet.Items);
-
             _jaraiLayoutService.Load(Path.Combine(basePath, "Data", "jarai-keyboard-layout.json"));
         }
 
@@ -93,31 +91,61 @@ namespace lamat
             _keySessionService.LoadItems(set.Items);
         }
 
+        // Converts the steps array of a word practice item into a flat character sequence.
+        // Shift steps are consumed here; each remaining entry is (expectedChars, keyId, isShifted).
+        private List<(string Chars, string KeyId, bool IsShifted)> ComputeWordCharSeq(KeySequencePracticeItem item)
+        {
+            var result = new List<(string, string, bool)>();
+            bool nextShifted = false;
+            foreach (var step in item.Steps)
+            {
+                if (ModifierKeyIds.IsModifier(step.KeyId))
+                {
+                    nextShifted = step.KeyId is "LeftShift" or "RightShift";
+                }
+                else
+                {
+                    string chars = nextShifted
+                        ? _jaraiLayoutService.GetShiftedLabel(step.KeyId)
+                        : _jaraiLayoutService.GetNormalLabel(step.KeyId);
+                    if (!string.IsNullOrEmpty(chars))
+                        result.Add((chars, step.KeyId, nextShifted));
+                    nextShifted = false;
+                }
+            }
+            return result;
+        }
+
         private void ShowHome()
         {
             HomePanel.Visibility = Visibility.Visible;
             FileSelectPanel.Visibility = Visibility.Collapsed;
             PracticePanel.Visibility = Visibility.Collapsed;
             _isAdvancing = false;
-            _heldModifier = null;
-            _pendingDisplayUpdate = false;
+            _shiftHeld = false;
             _displayHistory.Clear();
-            _sentenceBuffer = "";
+            _wordCharSeq = new();
+            _wordCharIdx = 0;
+            _wordHasError = false;
             _typedWordsDisplay = "";
             _submittedWords.Clear();
             _wordResults.Clear();
             _sentenceFailed = false;
+            _positionTargetKey = "";
+            _positionTargetShifted = false;
+            _positionTargetChar = "";
+            _positionErrorKey = null;
         }
 
         private void SwitchMode(PracticeModeType mode)
         {
             _currentMode = mode;
             _isAdvancing = false;
-            _heldModifier = null;
-            _pendingDisplayUpdate = false;
+            _shiftHeld = false;
+            _wordHasError = false;
             _displayHistory.Clear();
             ActualKeyText.Text = "";
-            ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush");
+            ActualKeyText.Foreground = (Brush)FindResource("MutedBrush");
             StatusText.Text = "";
             JaraiKeyboard.SetHighlights([]);
 
@@ -146,13 +174,15 @@ namespace lamat
             {
                 _positionCorrect = 0;
                 _positionErrorKey = null;
-                _positionGroupKeySet = new HashSet<string>(_positionGroupKeys, StringComparer.OrdinalIgnoreCase);
-                PickNextPositionKey();
+                PickNextPositionTarget();
                 PositionInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => PositionInputBox.Focus()), DispatcherPriority.Input);
             }
             else
             {
+                var item = _keySessionService.GetCurrentItem();
+                _wordCharSeq = item != null ? ComputeWordCharSeq(item) : new();
+                _wordCharIdx = 0;
                 WordPracticeInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => WordPracticeInputBox.Focus()), DispatcherPriority.Input);
             }
@@ -170,29 +200,9 @@ namespace lamat
                 RefreshKeySequenceUI();
         }
 
-        private void RefreshPositionUI()
-        {
-            TargetText.Text = _jaraiLayoutService.GetNormalLabel(_positionTargetKey);
-            ProgressText.Text = $"{_positionGroupName}  ·  {_positionCorrect} correct";
-            JaraiKeyboard.SetHighlights([_positionTargetKey], _positionErrorKey);
-        }
-
-        private void PickNextPositionKey()
-        {
-            if (_positionGroupKeys.Length == 0) return;
-            if (_positionGroupKeys.Length == 1) { _positionTargetKey = _positionGroupKeys[0]; return; }
-            string prev = _positionTargetKey;
-            string next;
-            do { next = _positionGroupKeys[_rng.Next(_positionGroupKeys.Length)]; }
-            while (next == prev);
-            _positionTargetKey = next;
-        }
-
         private void RefreshKeySequenceUI()
         {
             var currentItem = _keySessionService.GetCurrentItem();
-            var currentStep = _keySessionService.GetCurrentStep();
-
             if (currentItem == null)
             {
                 TargetText.Text = "Practice complete!";
@@ -206,15 +216,86 @@ namespace lamat
 
             TargetText.Text = currentItem.DisplayText;
             ProgressText.Text = $"{_keySessionService.CurrentItemIndex + 1} / {_keySessionService.TotalItemCount}";
-            ExpectedKeyText.Text = _keyboardHintService.GetHintText(currentStep, _heldModifier != null);
-            StatusText.Text = "";
-            JaraiKeyboard.SetHighlights(_keyboardHintService.GetKeysToHighlight(currentStep, _heldModifier));
+
+            if (_wordCharIdx < _wordCharSeq.Count)
+            {
+                var (_, keyId, isShifted) = _wordCharSeq[_wordCharIdx];
+                ExpectedKeyText.Text = (isShifted ? "Shift + " : "") +
+                                       JaraiKeyboardControl.EnglishLabel(keyId).ToUpperInvariant();
+                string? shiftKey = isShifted ? "LeftShift" : null;
+                JaraiKeyboard.SetHighlights([keyId], null, shiftKey, _shiftHeld);
+
+                if (!_wordHasError)
+                {
+                    StatusText.Text = isShifted
+                        ? (_shiftHeld ? "Shift held — now press the highlighted key"
+                                      : "Hold Shift, then press the highlighted key")
+                        : "";
+                }
+            }
+            else
+            {
+                ExpectedKeyText.Text = "";
+                JaraiKeyboard.SetHighlights([]);
+                if (!_wordHasError) StatusText.Text = "";
+            }
         }
+
+        private void RefreshPositionUI()
+        {
+            TargetText.Text = _positionTargetChar;
+            ProgressText.Text = $"{_positionGroupName}  ·  {_positionCorrect} correct";
+            string? shiftKey = _positionTargetShifted ? "LeftShift" : null;
+            JaraiKeyboard.SetHighlights([_positionTargetKey], _positionErrorKey, shiftKey, _shiftHeld);
+
+            if (_positionErrorKey != null)
+                StatusText.Text = "Wrong key — try again";
+            else if (_positionTargetShifted && !_shiftHeld)
+                StatusText.Text = "Hold Shift, then press the highlighted key";
+            else if (_positionTargetShifted && _shiftHeld)
+                StatusText.Text = "Shift held — now press the highlighted key";
+            else
+                StatusText.Text = "";
+        }
+
+        // Picks a random (key, normal/shifted) target from the current position group,
+        // avoiding repeating the exact same key+shift combo as last time.
+        // Only includes shifted chars that are Jarai (Khmer range) to avoid ASCII targets.
+        private void PickNextPositionTarget()
+        {
+            if (_positionGroupKeys.Length == 0) return;
+
+            var candidates = new List<(string Key, bool Shifted, string Chars)>();
+            foreach (var key in _positionGroupKeys)
+            {
+                string norm = _jaraiLayoutService.GetNormalLabel(key);
+                if (!string.IsNullOrEmpty(norm))
+                    candidates.Add((key, false, norm));
+                string shift = _jaraiLayoutService.GetShiftedLabel(key);
+                if (IsJaraiChar(shift))
+                    candidates.Add((key, true, shift));
+            }
+
+            var others = new List<(string Key, bool Shifted, string Chars)>();
+            foreach (var c in candidates)
+                if (!(c.Key == _positionTargetKey && c.Shifted == _positionTargetShifted))
+                    others.Add(c);
+            if (others.Count == 0) others = candidates;
+
+            var pick = others[_rng.Next(others.Count)];
+            _positionTargetKey = pick.Key;
+            _positionTargetShifted = pick.Shifted;
+            _positionTargetChar = pick.Chars;
+            _positionErrorKey = null;
+            _shiftHeld = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+        }
+
+        private static bool IsJaraiChar(string? text) =>
+            !string.IsNullOrEmpty(text) && text[0] >= 'ក' && text[0] <= '៿';
 
         private void RefreshSentenceUI()
         {
             var sentence = _sentenceSessionService.GetCurrentSentence();
-
             if (sentence == null)
             {
                 TargetText.Text = "Practice complete!";
@@ -225,12 +306,10 @@ namespace lamat
 
             var words = sentence.DisplayText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
             int currentIdx = _sentenceSessionService.CurrentWordIndex;
-
             TargetText.Inlines.Clear();
             for (int i = 0; i < words.Length; i++)
             {
                 if (i > 0) TargetText.Inlines.Add(new Run(" "));
-
                 Brush fg;
                 if (i < _wordResults.Count && _wordResults[i] == true)
                     fg = (Brush)FindResource("SuccessBrush");
@@ -240,10 +319,8 @@ namespace lamat
                     fg = (Brush)FindResource("AccentBrush");
                 else
                     fg = (Brush)FindResource("TextBrush");
-
                 TargetText.Inlines.Add(new Run(words[i]) { Foreground = fg });
             }
-
             ProgressText.Text = $"Sentence {_sentenceSessionService.CurrentSentenceIndex + 1} / {_sentenceSessionService.TotalSentenceCount}";
             StatusText.Text = "";
         }
@@ -255,13 +332,15 @@ namespace lamat
             _wordResults = new List<bool?>(new bool?[count]);
         }
 
+        // ── Input handlers ────────────────────────────────────────────────────────
+
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
             if (_currentMode == PracticeModeType.SentencePractice)
             {
                 Key k = e.Key switch
                 {
-                    Key.System      => e.SystemKey,
+                    Key.System       => e.SystemKey,
                     Key.ImeProcessed => e.ImeProcessedKey,
                     _ => e.Key
                 };
@@ -279,126 +358,131 @@ namespace lamat
                 }
                 return;
             }
-            if (_currentMode == PracticeModeType.PositionPractice)
+
+            if (_currentMode == PracticeModeType.WordPractice ||
+                _currentMode == PracticeModeType.PositionPractice)
             {
-                string keyId = ConvertKeyEventToKeyId(e);
-                if (string.IsNullOrEmpty(keyId) || ModifierKeyIds.IsModifier(keyId)) return;
-                e.Handled = true;
-                // Ignore keys outside the group (e.g. Keyman synthetic Back after composing a character)
-                if (!_positionGroupKeySet.Contains(keyId)) return;
-                if (string.Equals(keyId, _positionTargetKey, StringComparison.OrdinalIgnoreCase))
+                Key k = e.Key switch
                 {
-                    _positionCorrect++;
-                    _positionErrorKey = null;
-                    StatusText.Text = "";
-                    PickNextPositionKey();
-                }
-                else
+                    Key.System       => e.SystemKey,
+                    Key.ImeProcessed => e.ImeProcessedKey,
+                    _ => e.Key
+                };
+                if (k == Key.None && _lastRawVirtualKey != 0)
+                    k = KeyInterop.KeyFromVirtualKey(_lastRawVirtualKey);
+                if (k == Key.LeftShift || k == Key.RightShift)
                 {
-                    _positionErrorKey = keyId;
-                    string pressed = JaraiKeyboardControl.EnglishLabel(keyId).ToUpperInvariant();
-                    string target  = JaraiKeyboardControl.EnglishLabel(_positionTargetKey).ToUpperInvariant();
-                    StatusText.Text = $"Wrong — pressed {pressed}, target is {target}";
-                }
-                RefreshPositionUI();
-                return;
-            }
-
-            if (_isAdvancing) return;
-
-            var currentItem = _keySessionService.GetCurrentItem();
-            var currentStep = _keySessionService.GetCurrentStep();
-            if (currentItem == null || currentStep == null) return;
-
-            string actualKeyId = ConvertKeyEventToKeyId(e);
-            if (string.IsNullOrEmpty(actualKeyId)) return;
-
-            var result = _keyEvaluator.Evaluate(currentItem, _keySessionService.CurrentStepIndex, actualKeyId);
-
-            if (result == KeyInputResult.WrongStep)
-            {
-                ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("ErrorBrush");
-                StatusText.Text = $"Expected: {currentStep.KeyId}  ·  pressed: {actualKeyId}";
-                e.Handled = true;
-                return;
-            }
-
-            StatusText.Text = "";
-            ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("SuccessBrush");
-
-            if (ModifierKeyIds.IsModifier(actualKeyId))
-            {
-                _heldModifier = actualKeyId;
-            }
-            else
-            {
-                _heldModifier = null;
-                _pendingDisplayUpdate = true;
-            }
-
-            if (result == KeyInputResult.CorrectStep)
-            {
-                _keySessionService.AdvanceStep();
-                RefreshUI();
-            }
-            else if (result == KeyInputResult.ItemCompleted)
-            {
-                _heldModifier = null;
-                _pendingDisplayUpdate = false;
-                _isAdvancing = true;
-                _displayHistory.Clear();
-                ActualKeyText.Text = "";
-                ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush");
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    _keySessionService.AdvanceItem();
-                    _isAdvancing = false;
+                    _shiftHeld = true;
                     RefreshUI();
-                }), DispatcherPriority.Background);
+                    // Do NOT set e.Handled — Shift must reach the TextBox so Keyman can compose shifted chars.
+                    return;
+                }
+
+                // Position practice: evaluate physical key ID here (works regardless of keyboard language).
+                if (_currentMode == PracticeModeType.PositionPractice && k != Key.None)
+                {
+                    string keyId = KeyToKeyId(k);
+                    if (ModifierKeyIds.IsModifier(keyId)) return;
+                    e.Handled = true;
+                    if (!_positionGroupKeys.Any(pk => string.Equals(pk, keyId, StringComparison.OrdinalIgnoreCase))) return;
+                    if (string.Equals(keyId, _positionTargetKey, StringComparison.OrdinalIgnoreCase)
+                        && _shiftHeld == _positionTargetShifted)
+                    {
+                        _positionCorrect++;
+                        PickNextPositionTarget();
+                    }
+                    else
+                    {
+                        _positionErrorKey = keyId;
+                    }
+                    RefreshPositionUI();
+                }
             }
         }
 
         private void Window_KeyUp(object sender, KeyEventArgs e)
         {
             if (_currentMode == PracticeModeType.SentencePractice) return;
-            if (_currentMode == PracticeModeType.PositionPractice) return;
-            if (_heldModifier == null) return;
+            if (_currentMode != PracticeModeType.WordPractice &&
+                _currentMode != PracticeModeType.PositionPractice) return;
 
-            string released = ConvertKeyUpToKeyId(e);
-            if (released == _heldModifier)
+            Key k = e.Key switch
             {
-                _keySessionService.RevertStep();
-                _heldModifier = null;
-                RefreshKeySequenceUI();
-                StatusText.Text = "Hold Shift while pressing the next key";
+                Key.System       => e.SystemKey,
+                Key.ImeProcessed => e.ImeProcessedKey,
+                _ => e.Key
+            };
+            if (k == Key.LeftShift || k == Key.RightShift)
+            {
+                _shiftHeld = false;
+                RefreshUI();
             }
         }
 
         private void Window_TextInput(object sender, TextCompositionEventArgs e)
         {
+            // Sentence practice: block space/enter from landing in SentenceInputBox.
             if (_currentMode == PracticeModeType.SentencePractice)
             {
                 if (e.Text == " " || e.Text == "\r" || e.Text == "\n")
                     e.Handled = true;
-                return;
             }
-            if (!_pendingDisplayUpdate) return;
-
-            _pendingDisplayUpdate = false;
-            e.Handled = true; // Prevent character from accumulating in WordPracticeInputBox
-
-            if (!IsJaraiCharacter(e.Text))
-            {
-                _keySessionService.RevertStep();
-                ActualKeyText.Foreground = (System.Windows.Media.Brush)FindResource("MutedBrush");
-                RefreshKeySequenceUI();
-                StatusText.Text = "Switch to Jarai keyboard (Keyman) to continue";
-                return;
-            }
-
-            _displayHistory.Add(e.Text);
-            ActualKeyText.Text = string.Join("", _displayHistory);
+            // Word and position practice: let characters flow into their TextBoxes;
+            // evaluation happens in TextChanged handlers.
         }
+
+        private void WordPracticeInputBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        {
+            if (_currentMode != PracticeModeType.WordPractice || _isAdvancing) return;
+            string typed = WordPracticeInputBox.Text;
+            if (string.IsNullOrEmpty(typed)) return;
+            WordPracticeInputBox.Clear(); // ready for next keypress
+
+            if (_wordCharIdx >= _wordCharSeq.Count) return;
+
+            var (expectedChars, _, _) = _wordCharSeq[_wordCharIdx];
+
+            if (typed == expectedChars)
+            {
+                _wordHasError = false;
+                _displayHistory.Add(typed);
+                ActualKeyText.Text = string.Join("", _displayHistory);
+                ActualKeyText.Foreground = (Brush)FindResource("SuccessBrush");
+                _wordCharIdx++;
+
+                if (_wordCharIdx >= _wordCharSeq.Count)
+                {
+                    // Word complete — advance to next item.
+                    _isAdvancing = true;
+                    _shiftHeld = false;
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        _keySessionService.AdvanceItem();
+                        _isAdvancing = false;
+                        _wordCharIdx = 0;
+                        _wordHasError = false;
+                        _displayHistory.Clear();
+                        ActualKeyText.Text = "";
+                        ActualKeyText.Foreground = (Brush)FindResource("MutedBrush");
+                        var item = _keySessionService.GetCurrentItem();
+                        _wordCharSeq = item != null ? ComputeWordCharSeq(item) : new();
+                        RefreshUI();
+                    }), DispatcherPriority.Background);
+                }
+                else
+                {
+                    RefreshKeySequenceUI();
+                }
+            }
+            else
+            {
+                _wordHasError = true;
+                StatusText.Text = $"Wrong — expected {expectedChars}";
+                RefreshKeySequenceUI();
+            }
+        }
+
+        // ── Sentence practice logic ───────────────────────────────────────────────
 
         private void SentenceInputBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
@@ -406,23 +490,8 @@ namespace lamat
                 SentenceInputDisplay.Text = _typedWordsDisplay + SentenceInputBox.Text;
         }
 
-        private static string RemoveLastTextElement(string text)
-        {
-            var info = new System.Globalization.StringInfo(text);
-            int len = info.LengthInTextElements;
-            return len <= 1 ? "" : info.SubstringByTextElements(0, len - 1);
-        }
-
-        private static bool IsJaraiCharacter(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return true;
-            char c = text[0];
-            return c >= 'ក' && c <= '៿';
-        }
-
         private void AdvanceSentenceWord()
         {
-            // After a failed attempt, the next Space resets for retry
             if (_sentenceFailed)
             {
                 _sentenceFailed = false;
@@ -447,7 +516,6 @@ namespace lamat
             _submittedWords.Add(input);
             _typedWordsDisplay += input + " ";
             SentenceInputBox.Clear();
-
             _sentenceSessionService.AdvanceWord();
 
             if (_sentenceSessionService.IsCurrentSentenceCompleted())
@@ -480,65 +548,42 @@ namespace lamat
         {
             string lastWord = _submittedWords[^1];
             _submittedWords.RemoveAt(_submittedWords.Count - 1);
-
             _sentenceSessionService.RevertWord();
             _wordResults[_sentenceSessionService.CurrentWordIndex] = null;
-
             _typedWordsDisplay = _submittedWords.Count > 0
-                ? string.Join(" ", _submittedWords) + " "
-                : "";
-
+                ? string.Join(" ", _submittedWords) + " " : "";
             SentenceInputBox.Text = lastWord;
             SentenceInputBox.CaretIndex = lastWord.Length;
-
             RefreshSentenceUI();
         }
 
-        private string ConvertKeyEventToKeyId(KeyEventArgs e)
+        // Maps WPF Key enum to the canonical key ID string used in layout data.
+        // Key.Oem1–Oem7 are aliases for OemSemicolon–OemQuotes; .ToString() returns the
+        // alias name ("Oem1") in .NET 10, which doesn't match our stored key IDs.
+        private static string KeyToKeyId(Key key) => key switch
         {
-            Key key = e.Key switch
-            {
-                Key.System => e.SystemKey,
-                Key.ImeProcessed => e.ImeProcessedKey,
-                _ => e.Key
-            };
-            // When Keyman reports ImeProcessed+None, fall back to the raw VK captured in WndProc.
-            if (key == Key.None && _lastRawVirtualKey != 0)
-                key = KeyInterop.KeyFromVirtualKey(_lastRawVirtualKey);
-            if (key == Key.ImeProcessed || key == Key.None) return "";
-            return key.ToString();
-        }
+            Key.Oem1 => "OemSemicolon",
+            Key.Oem2 => "OemQuestion",
+            Key.Oem3 => "OemTilde",
+            Key.Oem4 => "OemOpenBrackets",
+            Key.Oem5 => "OemPipe",
+            Key.Oem6 => "OemCloseBrackets",
+            Key.Oem7 => "OemQuotes",
+            _        => key.ToString()
+        };
 
-        private string ConvertKeyUpToKeyId(KeyEventArgs e)
-        {
-            Key key = e.Key switch
-            {
-                Key.System => e.SystemKey,
-                Key.ImeProcessed => e.ImeProcessedKey,
-                _ => e.Key
-            };
-            return key.ToString();
-        }
+        // ── Navigation ────────────────────────────────────────────────────────────
 
-        private void HomeBtn_Click(object sender, RoutedEventArgs e)
-        {
-            ShowHome();
-        }
+        private void HomeBtn_Click(object sender, RoutedEventArgs e) => ShowHome();
 
-        private void PositionPracticeBtn_Click(object sender, RoutedEventArgs e)
-        {
+        private void PositionPracticeBtn_Click(object sender, RoutedEventArgs e) =>
             ShowFileSelector(PracticeModeType.PositionPractice);
-        }
 
-        private void WordPracticeBtn_Click(object sender, RoutedEventArgs e)
-        {
+        private void WordPracticeBtn_Click(object sender, RoutedEventArgs e) =>
             ShowFileSelector(PracticeModeType.WordPractice);
-        }
 
-        private void SentencePracticeBtn_Click(object sender, RoutedEventArgs e)
-        {
+        private void SentencePracticeBtn_Click(object sender, RoutedEventArgs e) =>
             ShowFileSelector(PracticeModeType.SentencePractice);
-        }
 
         private void ShowFileSelector(PracticeModeType mode)
         {
@@ -557,7 +602,6 @@ namespace lamat
                 ? Visibility.Collapsed : Visibility.Visible;
 
             FileListPanel.Children.Clear();
-
             string basePath = AppDomain.CurrentDomain.BaseDirectory;
 
             if (mode == PracticeModeType.PositionPractice)

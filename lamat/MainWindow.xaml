@@ -176,10 +176,12 @@
                                HorizontalAlignment="Center"
                                Margin="0,0,0,4"/>
 
-                    <!-- Invisible TextBox: gives Keyman's TSF context a focused input target -->
+                    <!-- Invisible TextBox: gives Keyman's TSF context a focused input target;
+                         TextChanged drives character-based evaluation -->
                     <TextBox x:Name="WordPracticeInputBox"
                              Width="1" Height="1" Opacity="0"
-                             IsTabStop="False"/>
+                             IsTabStop="False"
+                             TextChanged="WordPracticeInputBox_TextChanged"/>
 
                 </StackPanel>
 
