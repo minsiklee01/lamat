@@ -8,8 +8,7 @@
         Title="Jarai Typing Trainer" Height="760" Width="860"
         Background="{StaticResource BgBrush}"
         PreviewKeyDown="Window_KeyDown"
-        PreviewKeyUp="Window_KeyUp"
-        PreviewTextInput="Window_TextInput">
+        PreviewKeyUp="Window_KeyUp">
     <Grid>
 
         <!-- ══════════════════════ Home Screen ══════════════════════ -->
@@ -204,11 +203,10 @@
                                    Foreground="{StaticResource TextBrush}"
                                    HorizontalAlignment="Center"/>
                     </Border>
-                    <!-- Invisible TextBox: gives Keyman a focused text control to output into -->
+                    <!-- Invisible TextBox: holds keyboard focus so system key routing works -->
                     <TextBox x:Name="SentenceInputBox"
                              Width="1" Height="1" Opacity="0"
-                             IsTabStop="False"
-                             TextChanged="SentenceInputBox_TextChanged"/>
+                             IsTabStop="False"/>
                 </StackPanel>
 
                 <!-- ── Position practice section ── -->

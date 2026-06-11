@@ -35,6 +35,7 @@ namespace lamat
 
         // Sentence practice
         private string _typedWordsDisplay = "";
+        private string _sentenceCurrentWord = "";
         private readonly List<string> _submittedWords = new();
         private List<bool?> _wordResults = new();
         private bool _sentenceFailed = false;
@@ -128,6 +129,7 @@ namespace lamat
             _wordCharIdx = 0;
             _wordHasError = false;
             _typedWordsDisplay = "";
+            _sentenceCurrentWord = "";
             _submittedWords.Clear();
             _wordResults.Clear();
             _sentenceFailed = false;
@@ -163,11 +165,11 @@ namespace lamat
             if (isSentence)
             {
                 _typedWordsDisplay = "";
+                _sentenceCurrentWord = "";
                 _submittedWords.Clear();
                 _sentenceFailed = false;
                 SentenceInputDisplay.Text = "";
                 InitWordResults();
-                SentenceInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => SentenceInputBox.Focus()), DispatcherPriority.Input);
             }
             else if (isPosition)
@@ -344,17 +346,56 @@ namespace lamat
                     Key.ImeProcessed => e.ImeProcessedKey,
                     _ => e.Key
                 };
+                if (k == Key.None && _lastRawVirtualKey != 0)
+                    k = KeyInterop.KeyFromVirtualKey(_lastRawVirtualKey);
+
+                if (k == Key.LeftShift || k == Key.RightShift)
+                {
+                    _shiftHeld = true;
+                    return;
+                }
+
                 if (k == Key.Space || k == Key.Return)
                 {
                     AdvanceSentenceWord();
                     e.Handled = true;
+                    return;
                 }
-                else if (k == Key.Back && !_sentenceFailed
-                         && SentenceInputBox.Text.Length == 0
-                         && _submittedWords.Count > 0)
+
+                if (!_sentenceFailed && k == Key.Back)
                 {
-                    RevertLastWord();
                     e.Handled = true;
+                    if (_sentenceCurrentWord.Length > 0)
+                    {
+                        var info = new System.Globalization.StringInfo(_sentenceCurrentWord);
+                        int len = info.LengthInTextElements;
+                        _sentenceCurrentWord = len <= 1 ? ""
+                            : info.SubstringByTextElements(0, len - 1);
+                        SentenceInputDisplay.Text = _typedWordsDisplay + _sentenceCurrentWord;
+                    }
+                    else if (_submittedWords.Count > 0)
+                    {
+                        RevertLastWord();
+                    }
+                    return;
+                }
+
+                // Regular key: look up Jarai character from the layout and append to current word.
+                if (!_sentenceFailed && k != Key.None)
+                {
+                    string keyId = KeyToKeyId(k);
+                    if (!ModifierKeyIds.IsModifier(keyId))
+                    {
+                        e.Handled = true;
+                        string ch = _shiftHeld
+                            ? _jaraiLayoutService.GetShiftedLabel(keyId)
+                            : _jaraiLayoutService.GetNormalLabel(keyId);
+                        if (IsJaraiChar(ch))
+                        {
+                            _sentenceCurrentWord += ch;
+                            SentenceInputDisplay.Text = _typedWordsDisplay + _sentenceCurrentWord;
+                        }
+                    }
                 }
                 return;
             }
@@ -449,40 +490,20 @@ namespace lamat
 
         private void Window_KeyUp(object sender, KeyEventArgs e)
         {
-            if (_currentMode == PracticeModeType.SentencePractice) return;
-            if (_currentMode != PracticeModeType.WordPractice &&
-                _currentMode != PracticeModeType.PositionPractice) return;
-
             Key k = e.Key switch
             {
                 Key.System       => e.SystemKey,
                 Key.ImeProcessed => e.ImeProcessedKey,
                 _ => e.Key
             };
-            if (k == Key.LeftShift || k == Key.RightShift)
-            {
-                _shiftHeld = false;
+            if (k != Key.LeftShift && k != Key.RightShift) return;
+            _shiftHeld = false;
+            if (_currentMode == PracticeModeType.WordPractice ||
+                _currentMode == PracticeModeType.PositionPractice)
                 RefreshUI();
-            }
-        }
-
-        private void Window_TextInput(object sender, TextCompositionEventArgs e)
-        {
-            // Sentence practice: block space/enter from landing in SentenceInputBox.
-            if (_currentMode == PracticeModeType.SentencePractice)
-            {
-                if (e.Text == " " || e.Text == "\r" || e.Text == "\n")
-                    e.Handled = true;
-            }
         }
 
         // ── Sentence practice logic ───────────────────────────────────────────────
-
-        private void SentenceInputBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
-        {
-            if (!_sentenceFailed)
-                SentenceInputDisplay.Text = _typedWordsDisplay + SentenceInputBox.Text;
-        }
 
         private void AdvanceSentenceWord()
         {
@@ -491,15 +512,15 @@ namespace lamat
                 _sentenceFailed = false;
                 _sentenceSessionService.ResetWordIndex();
                 _typedWordsDisplay = "";
+                _sentenceCurrentWord = "";
                 _submittedWords.Clear();
-                SentenceInputBox.Clear();
                 SentenceInputDisplay.Text = "";
                 InitWordResults();
                 RefreshSentenceUI();
                 return;
             }
 
-            string input = SentenceInputBox.Text.Trim();
+            string input = _sentenceCurrentWord.Trim();
             if (string.IsNullOrEmpty(input)) return;
 
             int wordIndex = _sentenceSessionService.CurrentWordIndex;
@@ -509,7 +530,7 @@ namespace lamat
             _wordResults[wordIndex] = correct;
             _submittedWords.Add(input);
             _typedWordsDisplay += input + " ";
-            SentenceInputBox.Clear();
+            _sentenceCurrentWord = "";
             _sentenceSessionService.AdvanceWord();
 
             if (_sentenceSessionService.IsCurrentSentenceCompleted())
@@ -519,8 +540,8 @@ namespace lamat
                 {
                     _sentenceSessionService.AdvanceSentence();
                     _typedWordsDisplay = "";
+                    _sentenceCurrentWord = "";
                     _submittedWords.Clear();
-                    SentenceInputBox.Clear();
                     SentenceInputDisplay.Text = "";
                     InitWordResults();
                     RefreshSentenceUI();
@@ -546,8 +567,8 @@ namespace lamat
             _wordResults[_sentenceSessionService.CurrentWordIndex] = null;
             _typedWordsDisplay = _submittedWords.Count > 0
                 ? string.Join(" ", _submittedWords) + " " : "";
-            SentenceInputBox.Text = lastWord;
-            SentenceInputBox.CaretIndex = lastWord.Length;
+            _sentenceCurrentWord = lastWord;
+            SentenceInputDisplay.Text = _typedWordsDisplay + _sentenceCurrentWord;
             RefreshSentenceUI();
         }
 
