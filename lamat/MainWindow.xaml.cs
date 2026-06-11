@@ -378,14 +378,16 @@ namespace lamat
                     return;
                 }
 
-                // Position practice: evaluate physical key ID here (works regardless of keyboard language).
-                if (_currentMode == PracticeModeType.PositionPractice && k != Key.None)
+                if (k == Key.None) return;
+                string pressedId = KeyToKeyId(k);
+                if (ModifierKeyIds.IsModifier(pressedId)) return;
+                e.Handled = true;
+
+                // Position practice: check key is in the group and matches the target.
+                if (_currentMode == PracticeModeType.PositionPractice)
                 {
-                    string keyId = KeyToKeyId(k);
-                    if (ModifierKeyIds.IsModifier(keyId)) return;
-                    e.Handled = true;
-                    if (!_positionGroupKeys.Any(pk => string.Equals(pk, keyId, StringComparison.OrdinalIgnoreCase))) return;
-                    if (string.Equals(keyId, _positionTargetKey, StringComparison.OrdinalIgnoreCase)
+                    if (!_positionGroupKeys.Any(pk => string.Equals(pk, pressedId, StringComparison.OrdinalIgnoreCase))) return;
+                    if (string.Equals(pressedId, _positionTargetKey, StringComparison.OrdinalIgnoreCase)
                         && _shiftHeld == _positionTargetShifted)
                     {
                         _positionCorrect++;
@@ -393,9 +395,54 @@ namespace lamat
                     }
                     else
                     {
-                        _positionErrorKey = keyId;
+                        _positionErrorKey = pressedId;
                     }
                     RefreshPositionUI();
+                    return;
+                }
+
+                // Word practice: compare physical key ID against the expected step.
+                if (_currentMode == PracticeModeType.WordPractice && !_isAdvancing)
+                {
+                    if (_wordCharIdx >= _wordCharSeq.Count) return;
+                    var (expectedChars, expectedKeyId, isShifted) = _wordCharSeq[_wordCharIdx];
+                    if (string.Equals(pressedId, expectedKeyId, StringComparison.OrdinalIgnoreCase)
+                        && _shiftHeld == isShifted)
+                    {
+                        _wordHasError = false;
+                        _displayHistory.Add(expectedChars);
+                        ActualKeyText.Text = string.Join("", _displayHistory);
+                        ActualKeyText.Foreground = (Brush)FindResource("SuccessBrush");
+                        _wordCharIdx++;
+                        if (_wordCharIdx >= _wordCharSeq.Count)
+                        {
+                            _isAdvancing = true;
+                            _shiftHeld = false;
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                _keySessionService.AdvanceItem();
+                                _isAdvancing = false;
+                                _wordCharIdx = 0;
+                                _wordHasError = false;
+                                _displayHistory.Clear();
+                                ActualKeyText.Text = "";
+                                ActualKeyText.Foreground = (Brush)FindResource("MutedBrush");
+                                var item = _keySessionService.GetCurrentItem();
+                                _wordCharSeq = item != null ? ComputeWordCharSeq(item) : new();
+                                RefreshUI();
+                            }), DispatcherPriority.Background);
+                        }
+                        else
+                        {
+                            RefreshKeySequenceUI();
+                        }
+                    }
+                    else
+                    {
+                        _wordHasError = true;
+                        StatusText.Text = $"Wrong — expected {expectedChars}";
+                        RefreshKeySequenceUI();
+                    }
                 }
             }
         }
@@ -426,59 +473,6 @@ namespace lamat
             {
                 if (e.Text == " " || e.Text == "\r" || e.Text == "\n")
                     e.Handled = true;
-            }
-            // Word and position practice: let characters flow into their TextBoxes;
-            // evaluation happens in TextChanged handlers.
-        }
-
-        private void WordPracticeInputBox_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
-        {
-            if (_currentMode != PracticeModeType.WordPractice || _isAdvancing) return;
-            string typed = WordPracticeInputBox.Text;
-            if (string.IsNullOrEmpty(typed)) return;
-            WordPracticeInputBox.Clear(); // ready for next keypress
-
-            if (_wordCharIdx >= _wordCharSeq.Count) return;
-
-            var (expectedChars, _, _) = _wordCharSeq[_wordCharIdx];
-
-            if (typed == expectedChars)
-            {
-                _wordHasError = false;
-                _displayHistory.Add(typed);
-                ActualKeyText.Text = string.Join("", _displayHistory);
-                ActualKeyText.Foreground = (Brush)FindResource("SuccessBrush");
-                _wordCharIdx++;
-
-                if (_wordCharIdx >= _wordCharSeq.Count)
-                {
-                    // Word complete — advance to next item.
-                    _isAdvancing = true;
-                    _shiftHeld = false;
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        _keySessionService.AdvanceItem();
-                        _isAdvancing = false;
-                        _wordCharIdx = 0;
-                        _wordHasError = false;
-                        _displayHistory.Clear();
-                        ActualKeyText.Text = "";
-                        ActualKeyText.Foreground = (Brush)FindResource("MutedBrush");
-                        var item = _keySessionService.GetCurrentItem();
-                        _wordCharSeq = item != null ? ComputeWordCharSeq(item) : new();
-                        RefreshUI();
-                    }), DispatcherPriority.Background);
-                }
-                else
-                {
-                    RefreshKeySequenceUI();
-                }
-            }
-            else
-            {
-                _wordHasError = true;
-                StatusText.Text = $"Wrong — expected {expectedChars}";
-                RefreshKeySequenceUI();
             }
         }
 
