@@ -43,9 +43,8 @@ namespace lamat
         // Position practice
         private string[] _positionGroupKeys = [];
         private string _positionGroupName = "";
-        private string _positionTargetKey = "";
-        private bool _positionTargetShifted = false;
-        private string _positionTargetChar = "";
+        private readonly List<(string Key, bool Shifted, string Chars)> _positionHistory = new();
+        private readonly List<(string Key, bool Shifted, string Chars)> _positionUpcoming = new();
         private string? _positionErrorKey = null;
         private int _positionCorrect = 0;
         private readonly Random _rng = new();
@@ -133,10 +132,10 @@ namespace lamat
             _submittedWords.Clear();
             _wordResults.Clear();
             _sentenceFailed = false;
-            _positionTargetKey = "";
-            _positionTargetShifted = false;
-            _positionTargetChar = "";
+            _positionHistory.Clear();
+            _positionUpcoming.Clear();
             _positionErrorKey = null;
+            TargetText.Visibility = Visibility.Visible;
         }
 
         private void SwitchMode(PracticeModeType mode)
@@ -157,6 +156,7 @@ namespace lamat
 
             bool isSentence = mode == PracticeModeType.SentencePractice;
             bool isPosition = mode == PracticeModeType.PositionPractice;
+            TargetText.Visibility = isPosition ? Visibility.Collapsed : Visibility.Visible;
             KeySequencePanel.Visibility = (!isSentence && !isPosition) ? Visibility.Visible : Visibility.Collapsed;
             SentencePanel.Visibility    = isSentence ? Visibility.Visible : Visibility.Collapsed;
             PositionPanel.Visibility    = isPosition ? Visibility.Visible : Visibility.Collapsed;
@@ -176,7 +176,10 @@ namespace lamat
             {
                 _positionCorrect = 0;
                 _positionErrorKey = null;
-                PickNextPositionTarget();
+                _positionHistory.Clear();
+                _positionUpcoming.Clear();
+                for (int i = 0; i < 4; i++)
+                    EnqueueNextPositionTarget();
                 PositionInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => PositionInputBox.Focus()), DispatcherPriority.Input);
             }
@@ -245,25 +248,33 @@ namespace lamat
 
         private void RefreshPositionUI()
         {
-            TargetText.Text = _positionTargetChar;
+            var current = _positionUpcoming.Count > 0 ? _positionUpcoming[0] : default;
+            PositionCurrentKey.Text = current.Chars;
+            PastKey1.Text = _positionHistory.Count > 0 ? _positionHistory[0].Chars : "";
+            PastKey2.Text = _positionHistory.Count > 1 ? _positionHistory[1].Chars : "";
+            PastKey3.Text = _positionHistory.Count > 2 ? _positionHistory[2].Chars : "";
+            NextKey1.Text = _positionUpcoming.Count > 1 ? _positionUpcoming[1].Chars : "";
+            NextKey2.Text = _positionUpcoming.Count > 2 ? _positionUpcoming[2].Chars : "";
+            NextKey3.Text = _positionUpcoming.Count > 3 ? _positionUpcoming[3].Chars : "";
+
             ProgressText.Text = $"{_positionGroupName}  ·  {_positionCorrect} correct";
-            string? shiftKey = _positionTargetShifted ? "LeftShift" : null;
-            JaraiKeyboard.SetHighlights([_positionTargetKey], _positionErrorKey, shiftKey, _shiftHeld);
+            string? shiftKey = current.Shifted ? "LeftShift" : null;
+            JaraiKeyboard.SetHighlights([current.Key ?? ""], _positionErrorKey, shiftKey, _shiftHeld);
 
             if (_positionErrorKey != null)
                 StatusText.Text = "Wrong key — try again";
-            else if (_positionTargetShifted && !_shiftHeld)
+            else if (current.Shifted && !_shiftHeld)
                 StatusText.Text = "Hold Shift, then press the highlighted key";
-            else if (_positionTargetShifted && _shiftHeld)
+            else if (current.Shifted && _shiftHeld)
                 StatusText.Text = "Shift held — now press the highlighted key";
             else
                 StatusText.Text = "";
         }
 
-        // Picks a random (key, normal/shifted) target from the current position group,
-        // avoiding repeating the exact same key+shift combo as last time.
+        // Appends one random (key, normal/shifted) target to the upcoming queue,
+        // avoiding repeating the same key+shift combo as the last item already queued.
         // Only includes shifted chars that are Jarai (Khmer range) to avoid ASCII targets.
-        private void PickNextPositionTarget()
+        private void EnqueueNextPositionTarget()
         {
             if (_positionGroupKeys.Length == 0) return;
 
@@ -278,18 +289,14 @@ namespace lamat
                     candidates.Add((key, true, shift));
             }
 
+            var last = _positionUpcoming.Count > 0 ? _positionUpcoming[^1] : default;
             var others = new List<(string Key, bool Shifted, string Chars)>();
             foreach (var c in candidates)
-                if (!(c.Key == _positionTargetKey && c.Shifted == _positionTargetShifted))
+                if (!(c.Key == last.Key && c.Shifted == last.Shifted))
                     others.Add(c);
             if (others.Count == 0) others = candidates;
 
-            var pick = others[_rng.Next(others.Count)];
-            _positionTargetKey = pick.Key;
-            _positionTargetShifted = pick.Shifted;
-            _positionTargetChar = pick.Chars;
-            _positionErrorKey = null;
-            _shiftHeld = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+            _positionUpcoming.Add(others[_rng.Next(others.Count)]);
         }
 
         private static bool IsJaraiChar(string? text) =>
@@ -424,15 +431,22 @@ namespace lamat
                 if (ModifierKeyIds.IsModifier(pressedId)) return;
                 e.Handled = true;
 
-                // Position practice: check key is in the group and matches the target.
+                // Position practice: check key is in the group and matches the current target.
                 if (_currentMode == PracticeModeType.PositionPractice)
                 {
                     if (!_positionGroupKeys.Any(pk => string.Equals(pk, pressedId, StringComparison.OrdinalIgnoreCase))) return;
-                    if (string.Equals(pressedId, _positionTargetKey, StringComparison.OrdinalIgnoreCase)
-                        && _shiftHeld == _positionTargetShifted)
+                    var current = _positionUpcoming.Count > 0 ? _positionUpcoming[0] : default;
+                    if (current.Key != null
+                        && string.Equals(pressedId, current.Key, StringComparison.OrdinalIgnoreCase)
+                        && _shiftHeld == current.Shifted)
                     {
                         _positionCorrect++;
-                        PickNextPositionTarget();
+                        _positionHistory.Insert(0, _positionUpcoming[0]);
+                        if (_positionHistory.Count > 3) _positionHistory.RemoveAt(3);
+                        _positionUpcoming.RemoveAt(0);
+                        EnqueueNextPositionTarget();
+                        _positionErrorKey = null;
+                        _shiftHeld = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
                     }
                     else
                     {
@@ -634,11 +648,6 @@ namespace lamat
             }
             else if (mode == PracticeModeType.WordPractice)
             {
-                AddFileButton("Practice 1", () =>
-                {
-                    LoadWordPractice();
-                    SwitchMode(PracticeModeType.WordPractice);
-                });
                 AddFileButton("Practice 2", () =>
                 {
                     var set = _loader.LoadWordPracticeFromTextFile(
