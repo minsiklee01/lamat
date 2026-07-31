@@ -21,6 +21,8 @@ namespace lamat
         private readonly JaraiLayoutService _jaraiLayoutService = new();
         private readonly SentenceSessionService _sentenceSessionService = new();
         private readonly SentenceEvaluator _sentenceEvaluator = new();
+        private readonly SoundService _soundService = new();
+        private readonly ParagraphSessionService _paragraphSessionService = new();
 
         private PracticeModeType _currentMode = PracticeModeType.WordPractice;
         private PracticeModeType _fileSelectMode = PracticeModeType.WordPractice;
@@ -49,6 +51,12 @@ namespace lamat
         private int _positionCorrect = 0;
         private readonly Random _rng = new();
 
+        // Paragraph practice — character-based sequence for the current line, same shape as word practice
+        private List<(string Chars, string KeyId, bool IsShifted)> _paragraphCharSeq = new();
+        private int _paragraphCharIdx = 0;
+        private bool _paragraphHasError = false;
+        private bool _paragraphLineComplete = false;
+
         // Raw Win32 VK fallback: when Keyman reports Key.ImeProcessed + ImeProcessedKey=None,
         // recover the physical key from the most recent WM_KEYDOWN wParam.
         private int _lastRawVirtualKey;
@@ -58,6 +66,8 @@ namespace lamat
             InitializeComponent();
             LoadAllData();
             JaraiKeyboard.Initialize(_jaraiLayoutService);
+            _soundService.Initialize(AppDomain.CurrentDomain.BaseDirectory);
+            _soundService.StartMusic();
             Loaded += (_, _) =>
             {
                 HwndSource.FromHwnd(new WindowInteropHelper(this).Handle)
@@ -135,6 +145,10 @@ namespace lamat
             _positionHistory.Clear();
             _positionUpcoming.Clear();
             _positionErrorKey = null;
+            _paragraphCharSeq = new();
+            _paragraphCharIdx = 0;
+            _paragraphHasError = false;
+            _paragraphLineComplete = false;
             TargetText.Visibility = Visibility.Visible;
         }
 
@@ -154,12 +168,14 @@ namespace lamat
             FileSelectPanel.Visibility = Visibility.Collapsed;
             PracticePanel.Visibility = Visibility.Visible;
 
-            bool isSentence = mode == PracticeModeType.SentencePractice;
-            bool isPosition = mode == PracticeModeType.PositionPractice;
-            TargetText.Visibility = isPosition ? Visibility.Collapsed : Visibility.Visible;
-            KeySequencePanel.Visibility = (!isSentence && !isPosition) ? Visibility.Visible : Visibility.Collapsed;
+            bool isSentence  = mode == PracticeModeType.SentencePractice;
+            bool isPosition  = mode == PracticeModeType.PositionPractice;
+            bool isParagraph = mode == PracticeModeType.ParagraphPractice;
+            TargetText.Visibility = (isPosition || isParagraph) ? Visibility.Collapsed : Visibility.Visible;
+            KeySequencePanel.Visibility = (!isSentence && !isPosition && !isParagraph) ? Visibility.Visible : Visibility.Collapsed;
             SentencePanel.Visibility    = isSentence ? Visibility.Visible : Visibility.Collapsed;
             PositionPanel.Visibility    = isPosition ? Visibility.Visible : Visibility.Collapsed;
+            ParagraphPanel.Visibility   = isParagraph ? Visibility.Visible : Visibility.Collapsed;
             JaraiKeyboard.Visibility    = !isSentence ? Visibility.Visible : Visibility.Collapsed;
 
             if (isSentence)
@@ -183,6 +199,13 @@ namespace lamat
                 PositionInputBox.Clear();
                 Dispatcher.BeginInvoke(new Action(() => PositionInputBox.Focus()), DispatcherPriority.Input);
             }
+            else if (isParagraph)
+            {
+                _paragraphHasError = false;
+                _paragraphLineComplete = false;
+                LoadParagraphCharSeq();
+                Dispatcher.BeginInvoke(new Action(() => ParagraphInputBox.Focus()), DispatcherPriority.Input);
+            }
             else
             {
                 var item = _keySessionService.GetCurrentItem();
@@ -195,12 +218,25 @@ namespace lamat
             RefreshUI();
         }
 
+        private void LoadParagraphCharSeq()
+        {
+            var line = _paragraphSessionService.GetCurrentLine();
+            _paragraphCharSeq = line != null
+                ? (_jaraiLayoutService.DeriveCharKeySeq(line.DisplayText) ?? new())
+                : new();
+            _paragraphCharIdx = 0;
+            _paragraphHasError = false;
+            _paragraphLineComplete = false;
+        }
+
         private void RefreshUI()
         {
             if (_currentMode == PracticeModeType.SentencePractice)
                 RefreshSentenceUI();
             else if (_currentMode == PracticeModeType.PositionPractice)
                 RefreshPositionUI();
+            else if (_currentMode == PracticeModeType.ParagraphPractice)
+                RefreshParagraphUI();
             else
                 RefreshKeySequenceUI();
         }
@@ -302,6 +338,122 @@ namespace lamat
         private static bool IsJaraiChar(string? text) =>
             !string.IsNullOrEmpty(text) && text[0] >= 'ក' && text[0] <= '៿';
 
+        // Groups _paragraphCharSeq entries (one per physical key) into full grapheme clusters
+        // (a base character plus any combining marks, e.g. "ឝ៉ះ" spans 3 keys but is one
+        // visual character) so the UI can color/render each cluster as a single unbroken Run.
+        // Unicode's generic grapheme-cluster rules (StringInfo) only attach combining marks to
+        // the preceding base — they don't know that Khmer/Jarai's coeng sign always pulls in
+        // the *following* consonant too, forming one visually-joined subscript stack (e.g.
+        // "ស្រ" = S + coeng + R renders as one shape). Without this, splitting a Run right
+        // after the coeng orphans the subscript consonant and it renders as a dotted circle.
+        private static HashSet<int> GetKhmerClusterStarts(string text)
+        {
+            var starts = new HashSet<int> { 0 };
+            for (int i = 1; i < text.Length; i++)
+            {
+                char prev = text[i - 1];
+                char cur = text[i];
+                bool curContinuesCluster = JaraiLayoutService.IsCombiningMark(cur)
+                    || cur == JaraiLayoutService.Coeng || prev == JaraiLayoutService.Coeng;
+                if (!curContinuesCluster)
+                    starts.Add(i);
+            }
+            return starts;
+        }
+
+        private List<(string Text, int FirstIdx, int LastIdx)> BuildParagraphClusters()
+        {
+            var clusters = new List<(string, int, int)>();
+            if (_paragraphCharSeq.Count == 0) return clusters;
+
+            var fullTextBuilder = new System.Text.StringBuilder();
+            foreach (var step in _paragraphCharSeq) fullTextBuilder.Append(step.Chars);
+            string fullText = fullTextBuilder.ToString();
+
+            var clusterStarts = GetKhmerClusterStarts(fullText);
+
+            int offset = 0;
+            string currentText = "";
+            int firstIdx = 0;
+            for (int i = 0; i < _paragraphCharSeq.Count; i++)
+            {
+                if (currentText.Length == 0 || clusterStarts.Contains(offset))
+                {
+                    if (currentText.Length > 0)
+                        clusters.Add((currentText, firstIdx, i - 1));
+                    currentText = _paragraphCharSeq[i].Chars;
+                    firstIdx = i;
+                }
+                else
+                {
+                    currentText += _paragraphCharSeq[i].Chars;
+                }
+                offset += _paragraphCharSeq[i].Chars.Length;
+            }
+            if (currentText.Length > 0)
+                clusters.Add((currentText, firstIdx, _paragraphCharSeq.Count - 1));
+
+            return clusters;
+        }
+
+        private void RefreshParagraphUI()
+        {
+            var current = _paragraphSessionService.GetCurrentLine();
+            if (current == null)
+            {
+                ParagraphPrevLine.Text = "";
+                ParagraphCurrentLine.Inlines.Clear();
+                ParagraphNext1.Text = "";
+                ParagraphNext2.Text = "";
+                ParagraphNext3.Text = "";
+                ProgressText.Text = "";
+                StatusText.Text = "Story complete!";
+                JaraiKeyboard.SetHighlights([]);
+                return;
+            }
+
+            ParagraphPrevLine.Text = _paragraphSessionService.PeekLine(-1)?.DisplayText ?? "";
+            ParagraphNext1.Text = _paragraphSessionService.PeekLine(1)?.DisplayText ?? "";
+            ParagraphNext2.Text = _paragraphSessionService.PeekLine(2)?.DisplayText ?? "";
+            ParagraphNext3.Text = _paragraphSessionService.PeekLine(3)?.DisplayText ?? "";
+
+            ParagraphCurrentLine.Inlines.Clear();
+            foreach (var (text, firstIdx, lastIdx) in BuildParagraphClusters())
+            {
+                // Color the whole grapheme cluster as one unit — splitting a base character
+                // from its combining marks across separate Runs breaks Khmer/Jarai shaping
+                // (the mark renders as an isolated dotted-circle placeholder).
+                Brush fg = lastIdx < _paragraphCharIdx
+                    ? (Brush)FindResource("SuccessBrush")
+                    : firstIdx <= _paragraphCharIdx && _paragraphCharIdx <= lastIdx
+                        ? (Brush)FindResource(_paragraphHasError ? "ErrorBrush" : "AccentBrush")
+                        : (Brush)FindResource("TextBrush");
+                ParagraphCurrentLine.Inlines.Add(new Run(text) { Foreground = fg });
+            }
+
+            ProgressText.Text = $"Line {_paragraphSessionService.CurrentLineIndex + 1} / {_paragraphSessionService.TotalLineCount}";
+
+            if (_paragraphLineComplete)
+            {
+                StatusText.Text = "Press any key to continue";
+                JaraiKeyboard.SetHighlights([]);
+            }
+            else if (_paragraphCharIdx < _paragraphCharSeq.Count)
+            {
+                var (_, keyId, isShifted) = _paragraphCharSeq[_paragraphCharIdx];
+                string? shiftKey = isShifted ? "LeftShift" : null;
+                JaraiKeyboard.SetHighlights([keyId], null, shiftKey, _shiftHeld);
+                StatusText.Text = _paragraphHasError
+                    ? "Wrong key — try again"
+                    : isShifted
+                        ? (_shiftHeld ? "Shift held — now press the highlighted key"
+                                      : "Hold Shift, then press the highlighted key")
+                        : keyId == "Space"
+                            ? "Press SPACE"
+                            : "";
+            }
+        }
+
         private void RefreshSentenceUI()
         {
             var sentence = _sentenceSessionService.GetCurrentSentence();
@@ -362,6 +514,8 @@ namespace lamat
                     return;
                 }
 
+                _soundService.PlayClick();
+
                 if (k == Key.Space || k == Key.Return)
                 {
                     AdvanceSentenceWord();
@@ -408,7 +562,8 @@ namespace lamat
             }
 
             if (_currentMode == PracticeModeType.WordPractice ||
-                _currentMode == PracticeModeType.PositionPractice)
+                _currentMode == PracticeModeType.PositionPractice ||
+                _currentMode == PracticeModeType.ParagraphPractice)
             {
                 Key k = e.Key switch
                 {
@@ -430,6 +585,7 @@ namespace lamat
                 string pressedId = KeyToKeyId(k);
                 if (ModifierKeyIds.IsModifier(pressedId)) return;
                 e.Handled = true;
+                _soundService.PlayClick();
 
                 // Position practice: check key is in the group and matches the current target.
                 if (_currentMode == PracticeModeType.PositionPractice)
@@ -453,6 +609,40 @@ namespace lamat
                         _positionErrorKey = pressedId;
                     }
                     RefreshPositionUI();
+                    return;
+                }
+
+                // Paragraph practice: if the line was just completed, this keystroke is the
+                // "press any key to continue" trigger — advance without evaluating it.
+                if (_currentMode == PracticeModeType.ParagraphPractice)
+                {
+                    if (_paragraphLineComplete)
+                    {
+                        _paragraphLineComplete = false;
+                        _paragraphSessionService.AdvanceLine();
+                        LoadParagraphCharSeq();
+                        RefreshParagraphUI();
+                        return;
+                    }
+
+                    if (_paragraphCharIdx >= _paragraphCharSeq.Count) return;
+                    var (_, expectedParaKeyId, paraIsShifted) = _paragraphCharSeq[_paragraphCharIdx];
+                    if (string.Equals(pressedId, expectedParaKeyId, StringComparison.OrdinalIgnoreCase)
+                        && _shiftHeld == paraIsShifted)
+                    {
+                        _paragraphHasError = false;
+                        _paragraphCharIdx++;
+                        if (_paragraphCharIdx >= _paragraphCharSeq.Count)
+                        {
+                            _paragraphLineComplete = true;
+                            _shiftHeld = false;
+                        }
+                    }
+                    else
+                    {
+                        _paragraphHasError = true;
+                    }
+                    RefreshParagraphUI();
                     return;
                 }
 
@@ -513,7 +703,8 @@ namespace lamat
             if (k != Key.LeftShift && k != Key.RightShift) return;
             _shiftHeld = false;
             if (_currentMode == PracticeModeType.WordPractice ||
-                _currentMode == PracticeModeType.PositionPractice)
+                _currentMode == PracticeModeType.PositionPractice ||
+                _currentMode == PracticeModeType.ParagraphPractice)
                 RefreshUI();
         }
 
@@ -605,6 +796,12 @@ namespace lamat
 
         private void HomeBtn_Click(object sender, RoutedEventArgs e) => ShowHome();
 
+        private void MuteBtn_Click(object sender, RoutedEventArgs e)
+        {
+            _soundService.ToggleMute();
+            MuteButton.Content = _soundService.IsMuted ? "🔇" : "🔊";
+        }
+
         private void PositionPracticeBtn_Click(object sender, RoutedEventArgs e) =>
             ShowFileSelector(PracticeModeType.PositionPractice);
 
@@ -614,6 +811,9 @@ namespace lamat
         private void SentencePracticeBtn_Click(object sender, RoutedEventArgs e) =>
             ShowFileSelector(PracticeModeType.SentencePractice);
 
+        private void ParagraphPracticeBtn_Click(object sender, RoutedEventArgs e) =>
+            ShowFileSelector(PracticeModeType.ParagraphPractice);
+
         private void ShowFileSelector(PracticeModeType mode)
         {
             _fileSelectMode = mode;
@@ -622,9 +822,10 @@ namespace lamat
 
             FileSelectTitle.Text = mode switch
             {
-                PracticeModeType.WordPractice     => "Word Practice",
-                PracticeModeType.SentencePractice => "Sentence Practice",
-                _                                 => "Position Practice",
+                PracticeModeType.WordPractice      => "Word Practice",
+                PracticeModeType.SentencePractice  => "Sentence Practice",
+                PracticeModeType.ParagraphPractice => "Paragraph Practice",
+                _                                  => "Position Practice",
             };
 
             FileSelectCustomSection.Visibility = mode == PracticeModeType.PositionPractice
@@ -655,6 +856,20 @@ namespace lamat
                         _jaraiLayoutService);
                     _keySessionService.LoadItems(set.Items);
                     SwitchMode(PracticeModeType.WordPractice);
+                });
+            }
+            else if (mode == PracticeModeType.ParagraphPractice)
+            {
+                AddFileButton("Story 1", () =>
+                {
+                    var set = _loader.LoadParagraphPracticeFromTextFile(
+                        Path.Combine(basePath, "Data", "paragraph-practice-sample.txt"),
+                        _jaraiLayoutService, out int stripped);
+                    _paragraphSessionService.LoadLines(set.Items);
+                    SwitchMode(PracticeModeType.ParagraphPractice);
+                    if (stripped > 0)
+                        MessageBox.Show($"{stripped} character(s) not on the Jarai keyboard were skipped.",
+                            "Some Characters Skipped", MessageBoxButton.OK, MessageBoxImage.Information);
                 });
             }
             else
@@ -715,6 +930,21 @@ namespace lamat
                 }
                 _keySessionService.LoadItems(set.Items);
                 SwitchMode(PracticeModeType.WordPractice);
+            }
+            else if (_fileSelectMode == PracticeModeType.ParagraphPractice)
+            {
+                var set = _loader.LoadParagraphPracticeFromTextFile(dlg.FileName, _jaraiLayoutService, out int stripped);
+                if (set.Items.Count == 0)
+                {
+                    MessageBox.Show("No usable text found in the file.\n\nMake sure the file contains Jarai paragraphs made of characters on the Jarai keyboard.",
+                        "Load Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                _paragraphSessionService.LoadLines(set.Items);
+                SwitchMode(PracticeModeType.ParagraphPractice);
+                if (stripped > 0)
+                    MessageBox.Show($"{stripped} character(s) not on the Jarai keyboard were skipped.",
+                        "Some Characters Skipped", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             else
             {

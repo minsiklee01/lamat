@@ -9,12 +9,14 @@ namespace lamat.Controls
     public partial class JaraiKeyboardControl : UserControl
     {
         // All four main rows. Each row starts at x=0; stagger comes from special key widths.
+        // The Space row is separate — it's centered rather than aligned to the 720px grid.
         private static readonly string[][] Rows =
         [
             ["OemTilde", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D0", "OemMinus", "OemPlus", "Back"],
             ["Tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "OemOpenBrackets", "OemCloseBrackets", "OemPipe"],
             ["CapsLock", "A", "S", "D", "F", "G", "H", "J", "K", "L", "OemSemicolon", "OemQuotes", "Return"],
-            ["LeftShift", "Z", "X", "C", "V", "B", "N", "M", "OemComma", "OemPeriod", "OemQuestion", "RightShift"]
+            ["LeftShift", "Z", "X", "C", "V", "B", "N", "M", "OemComma", "OemPeriod", "OemQuestion", "RightShift"],
+            ["Space"]
         ];
 
         // Standard key: 42 wide, 3 margin each side → 48px per slot.
@@ -28,7 +30,7 @@ namespace lamat.Controls
         private const double Km = 3;
 
         private static readonly HashSet<string> SpecialKeys =
-            ["Back", "Tab", "CapsLock", "Return", "LeftShift", "RightShift"];
+            ["Back", "Tab", "CapsLock", "Return", "LeftShift", "RightShift", "Space"];
 
         private readonly Dictionary<string, Border>    _keyBorders = new();
         private readonly Dictionary<string, TextBlock> _keyLabels  = new();
@@ -48,8 +50,9 @@ namespace lamat.Controls
             {
                 var rowPanel = new StackPanel
                 {
-                    Orientation = Orientation.Horizontal,
-                    Margin      = new Thickness(0, first ? 0 : 4, 0, 0)
+                    Orientation         = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin              = new Thickness(0, first ? 0 : 4, 0, 0)
                 };
                 first = false;
 
@@ -177,6 +180,7 @@ namespace lamat.Controls
             "Return"     => 104,
             "LeftShift"  => 100,
             "RightShift" => 128,
+            "Space"      => 360,
             _            => Kw
         };
 
@@ -186,6 +190,7 @@ namespace lamat.Controls
             "Tab"      => "Tab",
             "CapsLock" => "Caps",
             "Return"   => "Enter",
+            "Space"    => "Space",
             _          => "Shift"
         };
 
