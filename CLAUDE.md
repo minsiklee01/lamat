@@ -37,15 +37,35 @@ The app starts at a **home screen** (`HomePanel`) and navigates into a **practic
 - **End of sentence**: if all words correct → advance to next sentence; if any wrong → show final colors, status message prompts retry; next Space resets the sentence
 - Space/Enter is intercepted in `PreviewKeyDown` before reaching the TextBox; also blocked in `PreviewTextInput` so no space lands in the TextBox
 
+### Paragraph Practice (active)
+- Loads a raw prose "story" `.txt` file (bundled sample: `Data/paragraph-practice-sample.txt`, plus custom file import) via `PracticeDataLoader.LoadParagraphPracticeFromTextFile`
+- Import pipeline: blank lines separate paragraphs; single newlines within a paragraph are soft wraps and get joined with a space; hyphens (`-`) and ASCII digit runs (verse/chapter markers) are stripped; the joined paragraph is then split into individual practice lines on sentence-ending punctuation (`។ . ! ?`); characters with no key mapping are stripped per-line (dropping any dependent combining marks/coeng-subscript cluster too, not just the single bad codepoint — see "Khmer/Jarai Grapheme Clustering" below) rather than discarding the whole line
+- **Vertical key-flow UI** (the paragraph-practice analogue of Position Practice's horizontal strip): previous line (faded, above) → current line (color-coded per character as typed) → next 3 lines (fading, below)
+- `ParagraphSessionService` tracks `CurrentLineIndex` into the flat line list; `PeekLine(offset)` reads prev/next lines for display
+- Evaluated character-by-character against physical keys exactly like Word Practice (via `JaraiLayoutService.DeriveCharKeySeq`), including full AltGr/Shift modifier support
+- Once the last character of a line is typed correctly, status shows "Press any key to continue"; the next keystroke (any key, not evaluated) advances to the next line
+
 ## Key Services
 
 - `KeySequenceSessionService` — tracks current item/step index for word practice; supports `RevertStep()`
 - `InputSequenceEvaluator` — compares physical key ID against expected step (case-insensitive)
-- `KeyboardHintService` — formats hint text (e.g. "Shift" for modifier steps); `GetKeysToHighlight()` returns key IDs for the visual keyboard to highlight
-- `JaraiLayoutService` — loads `jarai-keyboard-layout.json`; provides `GetNormalLabel(keyId)` and `GetShiftedLabel(keyId)`
+- `KeyboardHintService` — formats hint text (e.g. "Shift" for modifier steps); `GetKeysToHighlight()` returns key IDs for the visual keyboard to highlight (currently unused by `MainWindow`, which inlines equivalent logic)
+- `JaraiLayoutService` — loads `jarai-keyboard-layout.json`; provides `GetNormalLabel(keyId)`, `GetShiftedLabel(keyId)`, `GetAltGrLabel(keyId)`; `DeriveKeySteps`/`DeriveCharKeySeq` convert raw Jarai text into physical key sequences, resolving the correct modifier (`"LeftShift"`, `"RightAlt"`, or `null`) per character via the reverse char→key map
 - `SentenceSessionService` — tracks sentence/word index; supports `AdvanceWord()`, `RevertWord()`, `ResetWordIndex()`, `AdvanceSentence()`
 - `SentenceEvaluator` — Unicode-normalised word comparison
-- `PracticeDataLoader` — loads word practice from JSON, sentence practice line-by-line
+- `ParagraphSessionService` — tracks `CurrentLineIndex` through a flat list of practice lines; `PeekLine(offset)` for prev/next line lookahead used by the vertical key-flow UI
+- `PracticeDataLoader` — loads word practice from JSON, sentence practice line-by-line, paragraph practice from raw prose text
+- `SoundService` — background music (looped `MediaPlayer`) + a synthesized key-click sound effect (in-memory WAV, no bundled asset needed); `ToggleMute()` mutes both
+
+## Right-Alt (AltGr) Support
+
+A third character layer, alongside normal and Shift. `jarai-keyboard-layout.json` entries carry an optional `"altGr"` field; `JaraiKeyEntry.AltGr` holds it.
+
+- Represented as `string? Modifier` throughout (the KeyId to hold: `"LeftShift"`, `"RightAlt"`, or `null`) rather than a shift-specific bool — this is the same convention `word-practice.json`'s `KeyStep` list already used for authored Shift steps, just generalized
+- `JaraiLayoutService`'s reverse map (`TryGetKeyForChar`) resolves a character to `(keyId, modifier)`; `BuildReverseMap` registers normal/shifted/altGr entries with `modifier` = `null`/`"LeftShift"`/`"RightAlt"` respectively
+- `MainWindow` tracks `_altGrHeld` alongside `_shiftHeld`; Right Alt press/release is captured the same way Shift is (via `Key.System` → `e.SystemKey` unwrapping) and is **not** marked `e.Handled` on the modifier key itself, so Keyman still sees it
+- Applies uniformly across Word/Position/Paragraph/Sentence practice matching and highlighting — `ModifierDisplayName(modifier)` formats "Shift" or "Alt" for status text
+- Position Practice's candidate generation (`EnqueueNextPositionTarget`) includes the AltGr layer alongside normal/shifted, filtered by `IsJaraiChar` the same way shifted chars are (so ASCII punctuation on the AltGr layer, e.g. `~$&*{}=[]:,.`, isn't drilled as a position-practice target)
 
 ## Sentence Practice State (`MainWindow`)
 
@@ -59,12 +79,11 @@ The app starts at a **home screen** (`HomePanel`) and navigates into a **practic
 ## Key Controls
 
 ### `JaraiKeyboardControl` (`lamat/Controls/`)
-- Programmatically builds a 4-row QWERTY keyboard on `Initialize(JaraiLayoutService)`
-- All four rows are 720px wide (special key widths calculated precisely so rows align)
+- Programmatically builds a QWERTY keyboard on `Initialize(JaraiLayoutService)`: 4 main rows (720px wide, special key widths calculated precisely so rows align) plus a 5th row with `Space` and `RightAlt` (centered, not aligned to the 720px grid)
 - Each key shows the Jarai character (large, centered) and the English key identifier (small, top-left)
-- Special keys (Tab, Caps, Bksp, Enter, Shift) use `SurfaceBrush` background and muted label
-- `SetHighlights(string[] keyIds)` highlights the specified keys in `AccentBrush`
-- Called from `RefreshKeySequenceUI()` via `_keyboardHintService.GetKeysToHighlight()`
+- Special keys (Tab, Caps, Bksp, Enter, Shift, Space, Alt) use `SurfaceBrush` background and muted label
+- `SetHighlights(string[] keyIds, string? errorKeyId, string? modifierKey, bool modifierHeld)` highlights the target key(s) in `AccentBrush`, and the given modifier key (e.g. `"LeftShift"` or `"RightAlt"`) in amber (needed) or green (held) — generic across Shift and AltGr, not shift-specific despite the parameter having originally been named `shiftKey`/`shiftHeld`
+- Called directly from `MainWindow`'s `Refresh*UI()` methods (not via `KeyboardHintService`, which is currently unused)
 
 ## Key Data Format (`word-practice.json`)
 
@@ -89,7 +108,9 @@ Key IDs are WPF `Key` enum names: letter keys (`A`–`Z`), digit keys (`D0`–`D
 
 ## Keyboard Layout Data (`jarai-keyboard-layout.json`)
 
-Maps WPF key ID → `{ "normal": "ក", "shifted": "គ" }` for all keys in the Jarai Keyman layout. Used by `JaraiLayoutService` and `JaraiKeyboardControl`. Covers all letter keys, number row, and Oem symbol keys.
+Maps WPF key ID → `{ "normal": "ក", "shifted": "គ", "altGr": "ឝ" }` for all keys in the Jarai Keyman layout. `altGr` is optional and only present on keys with a genuine third-layer character. Used by `JaraiLayoutService` and `JaraiKeyboardControl`. Covers all letter keys, number row, and Oem symbol keys.
+
+Some entries are intentionally blank (`""`) — `R`'s shifted value, `OemPlus`'s normal value, and `D8`'s shifted value — because those combos don't correspond to real Jarai characters and were removed from training/typing on request. A blank `normal`/`shifted`/`altGr` value excludes that layer from the reverse char→key map, Position Practice candidates, and the visual keyboard's label for that slot, without deleting the key entry itself (deleting the whole entry would make `GetNormalLabel` fall back to showing the raw key ID as a label).
 
 ## Dark Theme (`App.xaml`)
 
@@ -118,6 +139,20 @@ Global styles defined for `Button` (accent, rounded), `GhostButton` (keyed style
 - `e.Handled = true` in `PreviewKeyDown` can suppress the following `PreviewTextInput` — only set it when actually consuming the key (wrong key presses, Space/Enter submission); do **not** set it unconditionally for Backspace or it will block Keyman's composition output
 - **Both modes require a focused `TextBox` for Keyman to work.** Keyman is a TSF (Text Services Framework) input method; WPF only activates a TSF edit context when a TextBox (or similar IME-aware element) is focused. Without one, Keyman's conversion pipeline is dormant and all keystrokes are silently dropped. `WordPracticeInputBox` and `SentenceInputBox` exist solely for this purpose — do not remove them.
 - `ConvertKeyEventToKeyId` unwraps `Key.ImeProcessed` → `e.ImeProcessedKey` and filters out residual `Key.ImeProcessed` / `Key.None` results to avoid ghost error messages on focus re-entry
+
+## Sound
+
+- `SoundService` (`lamat/Services/`) owns a looped `MediaPlayer` for background music and a `SoundPlayer` playing an in-memory-synthesized key-click WAV (exponentially-decaying tone + noise burst) — no bundled click asset is needed
+- Background music is optional: `Initialize` checks for `Data/Audio/background-music.mp3` (or `.wav`) and no-ops if absent; the `.csproj` globs `Data\Audio\**\*.mp3`/`*.wav` to copy-to-output automatically, so dropping a file in that folder is enough to enable it
+- A 🔊/🔇 button (`MuteButton`, top-right, visible on every screen) calls `SoundService.ToggleMute()`, which pauses/resumes music and suppresses the click effect
+- `PlayClick()` is called at the point each real (non-modifier) key press is accepted, in Word/Position/Paragraph practice's shared key-down handler and in Sentence Practice's key-down handler
+
+## Khmer/Jarai Grapheme Clustering
+
+Khmer-script combining marks and the coeng (subscript) sign need special handling beyond .NET's generic `StringInfo` grapheme rules, in two places:
+
+- **`JaraiLayoutService.StripUnmappableChars`**: when the *base* character of a cluster has no key mapping and gets dropped, any combining marks or coeng+subscript-consonant stack immediately following it are dropped too — otherwise the orphaned dependent renders as a dotted-circle placeholder (no base to attach to). `IsCombiningMark` (Unicode category check) and the `Coeng` constant (`'្'`, U+17D2) drive this.
+- **`MainWindow.BuildParagraphClusters`** (Paragraph Practice's per-character UI coloring): Unicode's standard grapheme-cluster rules only attach combining marks to the *preceding* base — they don't know Khmer's coeng sign also pulls in the *following* consonant to form one visually-joined subscript stack (e.g. `ស្រ` = S + coeng + R renders as one shape). `GetKhmerClusterStarts` computes cluster boundaries with that coeng rule so each `Run` colored in the UI is a whole cluster, never split mid-character — splitting one (e.g. coloring the base green and the coeng+subscript accent-colored in a separate `Run`) causes the same dotted-circle rendering bug.
 
 ## Build & Run
 

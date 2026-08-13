@@ -16,7 +16,7 @@ namespace lamat.Controls
             ["Tab", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "OemOpenBrackets", "OemCloseBrackets", "OemPipe"],
             ["CapsLock", "A", "S", "D", "F", "G", "H", "J", "K", "L", "OemSemicolon", "OemQuotes", "Return"],
             ["LeftShift", "Z", "X", "C", "V", "B", "N", "M", "OemComma", "OemPeriod", "OemQuestion", "RightShift"],
-            ["Space"]
+            ["Space", "RightAlt"]
         ];
 
         // Standard key: 42 wide, 3 margin each side → 48px per slot.
@@ -30,7 +30,7 @@ namespace lamat.Controls
         private const double Km = 3;
 
         private static readonly HashSet<string> SpecialKeys =
-            ["Back", "Tab", "CapsLock", "Return", "LeftShift", "RightShift", "Space"];
+            ["Back", "Tab", "CapsLock", "Return", "LeftShift", "RightShift", "Space", "RightAlt"];
 
         private readonly Dictionary<string, Border>    _keyBorders = new();
         private readonly Dictionary<string, TextBlock> _keyLabels  = new();
@@ -135,35 +135,36 @@ namespace lamat.Controls
             }, mainLabel);
         }
 
-        // shiftKey: key ID to paint in amber (needed) or green (held), for Shift visual feedback.
+        // modifierKey: key ID to paint in amber (needed) or green (held) — e.g. "LeftShift" or
+        // "RightAlt" — for whichever modifier the current expected step requires.
         public void SetHighlights(string[] keyIds, string? errorKeyId = null,
-                                  string? shiftKey = null, bool shiftHeld = false)
+                                  string? modifierKey = null, bool modifierHeld = false)
         {
             var on = new HashSet<string>(keyIds);
             foreach (var (keyId, border) in _keyBorders)
             {
-                bool lit     = on.Contains(keyId);
-                bool isError = !lit && keyId == errorKeyId;
-                bool isShift = !lit && !isError && keyId == shiftKey;
-                bool special = _specials.Contains(keyId);
+                bool lit        = on.Contains(keyId);
+                bool isError    = !lit && keyId == errorKeyId;
+                bool isModifier = !lit && !isError && keyId == modifierKey;
+                bool special    = _specials.Contains(keyId);
 
                 border.Background = lit
                     ? (Brush)FindResource("AccentBrush")
                     : isError
                         ? (Brush)FindResource("ErrorBrush")
-                        : isShift
-                            ? (Brush)FindResource(shiftHeld ? "SuccessBrush" : "WarningBrush")
+                        : isModifier
+                            ? (Brush)FindResource(modifierHeld ? "SuccessBrush" : "WarningBrush")
                             : special
                                 ? (Brush)FindResource("SurfaceBrush")
                                 : (Brush)FindResource("Surface2Brush");
 
-                border.BorderBrush = (lit || isError || isShift)
+                border.BorderBrush = (lit || isError || isModifier)
                     ? (Brush)FindResource(lit ? "AccentHoverBrush" : isError ? "ErrorBrush"
-                        : shiftHeld ? "SuccessBrush" : "WarningBrush")
+                        : modifierHeld ? "SuccessBrush" : "WarningBrush")
                     : (Brush)FindResource("BorderBrush");
-                border.BorderThickness = new Thickness((lit || isError || isShift) ? 2 : 1.5);
+                border.BorderThickness = new Thickness((lit || isError || isModifier) ? 2 : 1.5);
 
-                _keyLabels[keyId].Foreground = (lit || isError || isShift)
+                _keyLabels[keyId].Foreground = (lit || isError || isModifier)
                     ? Brushes.White
                     : special
                         ? (Brush)FindResource("MutedBrush")
@@ -180,7 +181,8 @@ namespace lamat.Controls
             "Return"     => 104,
             "LeftShift"  => 100,
             "RightShift" => 128,
-            "Space"      => 360,
+            "Space"      => 300,
+            "RightAlt"   => 60,
             _            => Kw
         };
 
@@ -191,6 +193,7 @@ namespace lamat.Controls
             "CapsLock" => "Caps",
             "Return"   => "Enter",
             "Space"    => "Space",
+            "RightAlt" => "Alt",
             _          => "Shift"
         };
 

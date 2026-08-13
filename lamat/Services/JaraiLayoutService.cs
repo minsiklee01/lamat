@@ -8,8 +8,9 @@ namespace lamat.Services
     public class JaraiLayoutService
     {
         private Dictionary<string, JaraiKeyEntry> _map = new();
-        // char(s) → (keyId, isShifted); 2-char entries must be checked before 1-char
-        private Dictionary<string, (string KeyId, bool IsShifted)> _reverseMap = new();
+        // char(s) → (keyId, modifier); modifier is the KeyId to hold ("LeftShift"/"RightAlt")
+        // or null for the unmodified layer. 2-char entries must be checked before 1-char.
+        private Dictionary<string, (string KeyId, string? Modifier)> _reverseMap = new();
 
         public void Load(string path)
         {
@@ -30,6 +31,9 @@ namespace lamat.Services
         public string GetShiftedLabel(string keyId) =>
             _map.TryGetValue(keyId, out var e) ? e.Shifted : "";
 
+        public string GetAltGrLabel(string keyId) =>
+            _map.TryGetValue(keyId, out var e) ? e.AltGr : "";
+
         // Returns null if a character in the text has no mapping.
         public List<KeyStep>? DeriveKeySteps(string text)
         {
@@ -40,13 +44,13 @@ namespace lamat.Services
                 // Try 2-char cluster first
                 if (i + 1 < text.Length && _reverseMap.TryGetValue(text.Substring(i, 2), out var m2))
                 {
-                    if (m2.IsShifted) steps.Add(new KeyStep { KeyId = "LeftShift" });
+                    if (m2.Modifier != null) steps.Add(new KeyStep { KeyId = m2.Modifier });
                     steps.Add(new KeyStep { KeyId = m2.KeyId });
                     i += 2;
                 }
                 else if (_reverseMap.TryGetValue(text.Substring(i, 1), out var m1))
                 {
-                    if (m1.IsShifted) steps.Add(new KeyStep { KeyId = "LeftShift" });
+                    if (m1.Modifier != null) steps.Add(new KeyStep { KeyId = m1.Modifier });
                     steps.Add(new KeyStep { KeyId = m1.KeyId });
                     i += 1;
                 }
@@ -60,28 +64,28 @@ namespace lamat.Services
 
         // Converts arbitrary Jarai text (may contain literal spaces between words) into a
         // per-physical-key sequence for character-by-character comparison, mirroring
-        // DeriveKeySteps but returning the matched chars alongside each key/shift pair.
+        // DeriveKeySteps but returning the matched chars alongside each key/modifier pair.
         // Space bar has no layout entry (it isn't remapped by Keyman) — it always maps to " ".
         // Returns null if a character in the text has no mapping.
-        public List<(string Chars, string KeyId, bool IsShifted)>? DeriveCharKeySeq(string text)
+        public List<(string Chars, string KeyId, string? Modifier)>? DeriveCharKeySeq(string text)
         {
-            var result = new List<(string, string, bool)>();
+            var result = new List<(string, string, string?)>();
             int i = 0;
             while (i < text.Length)
             {
                 if (text[i] == ' ')
                 {
-                    result.Add((" ", "Space", false));
+                    result.Add((" ", "Space", null));
                     i++;
                 }
-                else if (i + 1 < text.Length && TryGetKeyForChar(text.Substring(i, 2), out var keyId2, out var shifted2))
+                else if (i + 1 < text.Length && TryGetKeyForChar(text.Substring(i, 2), out var keyId2, out var modifier2))
                 {
-                    result.Add((text.Substring(i, 2), keyId2, shifted2));
+                    result.Add((text.Substring(i, 2), keyId2, modifier2));
                     i += 2;
                 }
-                else if (TryGetKeyForChar(text.Substring(i, 1), out var keyId1, out var shifted1))
+                else if (TryGetKeyForChar(text.Substring(i, 1), out var keyId1, out var modifier1))
                 {
-                    result.Add((text.Substring(i, 1), keyId1, shifted1));
+                    result.Add((text.Substring(i, 1), keyId1, modifier1));
                     i += 1;
                 }
                 else
@@ -157,13 +161,13 @@ namespace lamat.Services
             return sb.ToString();
         }
 
-        public bool TryGetKeyForChar(string chars, out string keyId, out bool shifted)
+        public bool TryGetKeyForChar(string chars, out string keyId, out string? modifier)
         {
             if (_reverseMap.TryGetValue(chars, out var m))
             {
-                keyId = m.KeyId; shifted = m.IsShifted; return true;
+                keyId = m.KeyId; modifier = m.Modifier; return true;
             }
-            keyId = ""; shifted = false; return false;
+            keyId = ""; modifier = null; return false;
         }
 
         private void BuildReverseMap()
@@ -172,9 +176,11 @@ namespace lamat.Services
             foreach (var (keyId, entry) in _map)
             {
                 if (!string.IsNullOrEmpty(entry.Normal))
-                    _reverseMap.TryAdd(entry.Normal, (keyId, false));
+                    _reverseMap.TryAdd(entry.Normal, (keyId, null));
                 if (!string.IsNullOrEmpty(entry.Shifted))
-                    _reverseMap.TryAdd(entry.Shifted, (keyId, true));
+                    _reverseMap.TryAdd(entry.Shifted, (keyId, "LeftShift"));
+                if (!string.IsNullOrEmpty(entry.AltGr))
+                    _reverseMap.TryAdd(entry.AltGr, (keyId, "RightAlt"));
             }
         }
     }

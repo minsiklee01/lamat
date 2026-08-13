@@ -28,10 +28,12 @@ namespace lamat
         private PracticeModeType _fileSelectMode = PracticeModeType.WordPractice;
         private bool _isAdvancing = false;
         private bool _shiftHeld = false;
+        private bool _altGrHeld = false;
 
-        // Word practice — character-based sequence derived from steps at load time
+        // Word practice — character-based sequence derived from steps at load time.
+        // Modifier is the KeyId that must be held ("LeftShift"/"RightAlt"), or null for none.
         private readonly List<string> _displayHistory = new();
-        private List<(string Chars, string KeyId, bool IsShifted)> _wordCharSeq = new();
+        private List<(string Chars, string KeyId, string? Modifier)> _wordCharSeq = new();
         private int _wordCharIdx = 0;
         private bool _wordHasError = false;
 
@@ -45,14 +47,14 @@ namespace lamat
         // Position practice
         private string[] _positionGroupKeys = [];
         private string _positionGroupName = "";
-        private readonly List<(string Key, bool Shifted, string Chars)> _positionHistory = new();
-        private readonly List<(string Key, bool Shifted, string Chars)> _positionUpcoming = new();
+        private readonly List<(string Key, string? Modifier, string Chars)> _positionHistory = new();
+        private readonly List<(string Key, string? Modifier, string Chars)> _positionUpcoming = new();
         private string? _positionErrorKey = null;
         private int _positionCorrect = 0;
         private readonly Random _rng = new();
 
         // Paragraph practice — character-based sequence for the current line, same shape as word practice
-        private List<(string Chars, string KeyId, bool IsShifted)> _paragraphCharSeq = new();
+        private List<(string Chars, string KeyId, string? Modifier)> _paragraphCharSeq = new();
         private int _paragraphCharIdx = 0;
         private bool _paragraphHasError = false;
         private bool _paragraphLineComplete = false;
@@ -102,29 +104,45 @@ namespace lamat
         }
 
         // Converts the steps array of a word practice item into a flat character sequence.
-        // Shift steps are consumed here; each remaining entry is (expectedChars, keyId, isShifted).
-        private List<(string Chars, string KeyId, bool IsShifted)> ComputeWordCharSeq(KeySequencePracticeItem item)
+        // Modifier steps (Shift/AltGr) are consumed here; each remaining entry is
+        // (expectedChars, keyId, modifier), where modifier is the KeyId to hold or null.
+        private List<(string Chars, string KeyId, string? Modifier)> ComputeWordCharSeq(KeySequencePracticeItem item)
         {
-            var result = new List<(string, string, bool)>();
-            bool nextShifted = false;
+            var result = new List<(string, string, string?)>();
+            string? nextModifier = null;
             foreach (var step in item.Steps)
             {
                 if (ModifierKeyIds.IsModifier(step.KeyId))
                 {
-                    nextShifted = step.KeyId is "LeftShift" or "RightShift";
+                    nextModifier = step.KeyId switch
+                    {
+                        "LeftShift" or "RightShift" => "LeftShift",
+                        "LeftAlt" or "RightAlt"      => "RightAlt",
+                        _                            => null
+                    };
                 }
                 else
                 {
-                    string chars = nextShifted
-                        ? _jaraiLayoutService.GetShiftedLabel(step.KeyId)
-                        : _jaraiLayoutService.GetNormalLabel(step.KeyId);
+                    string chars = nextModifier switch
+                    {
+                        "LeftShift" => _jaraiLayoutService.GetShiftedLabel(step.KeyId),
+                        "RightAlt"  => _jaraiLayoutService.GetAltGrLabel(step.KeyId),
+                        _           => _jaraiLayoutService.GetNormalLabel(step.KeyId)
+                    };
                     if (!string.IsNullOrEmpty(chars))
-                        result.Add((chars, step.KeyId, nextShifted));
-                    nextShifted = false;
+                        result.Add((chars, step.KeyId, nextModifier));
+                    nextModifier = null;
                 }
             }
             return result;
         }
+
+        private static string ModifierDisplayName(string? modifier) => modifier switch
+        {
+            "LeftShift" or "RightShift" => "Shift",
+            "LeftAlt" or "RightAlt"     => "Alt",
+            _                           => ""
+        };
 
         private void ShowHome()
         {
@@ -133,6 +151,7 @@ namespace lamat
             PracticePanel.Visibility = Visibility.Collapsed;
             _isAdvancing = false;
             _shiftHeld = false;
+            _altGrHeld = false;
             _displayHistory.Clear();
             _wordCharSeq = new();
             _wordCharIdx = 0;
@@ -157,6 +176,7 @@ namespace lamat
             _currentMode = mode;
             _isAdvancing = false;
             _shiftHeld = false;
+            _altGrHeld = false;
             _wordHasError = false;
             _displayHistory.Clear();
             ActualKeyText.Text = "";
@@ -260,17 +280,18 @@ namespace lamat
 
             if (_wordCharIdx < _wordCharSeq.Count)
             {
-                var (_, keyId, isShifted) = _wordCharSeq[_wordCharIdx];
-                ExpectedKeyText.Text = (isShifted ? "Shift + " : "") +
+                var (_, keyId, modifier) = _wordCharSeq[_wordCharIdx];
+                string modName = ModifierDisplayName(modifier);
+                ExpectedKeyText.Text = (modifier != null ? modName + " + " : "") +
                                        JaraiKeyboardControl.EnglishLabel(keyId).ToUpperInvariant();
-                string? shiftKey = isShifted ? "LeftShift" : null;
-                JaraiKeyboard.SetHighlights([keyId], null, shiftKey, _shiftHeld);
+                bool modifierHeld = modifier == "LeftShift" ? _shiftHeld : modifier == "RightAlt" && _altGrHeld;
+                JaraiKeyboard.SetHighlights([keyId], null, modifier, modifierHeld);
 
                 if (!_wordHasError)
                 {
-                    StatusText.Text = isShifted
-                        ? (_shiftHeld ? "Shift held — now press the highlighted key"
-                                      : "Hold Shift, then press the highlighted key")
+                    StatusText.Text = modifier != null
+                        ? (modifierHeld ? $"{modName} held — now press the highlighted key"
+                                        : $"Hold {modName}, then press the highlighted key")
                         : "";
                 }
             }
@@ -294,41 +315,45 @@ namespace lamat
             NextKey3.Text = _positionUpcoming.Count > 3 ? _positionUpcoming[3].Chars : "";
 
             ProgressText.Text = $"{_positionGroupName}  ·  {_positionCorrect} correct";
-            string? shiftKey = current.Shifted ? "LeftShift" : null;
-            JaraiKeyboard.SetHighlights([current.Key ?? ""], _positionErrorKey, shiftKey, _shiftHeld);
+            string modName = ModifierDisplayName(current.Modifier);
+            bool modifierHeld = current.Modifier == "LeftShift" ? _shiftHeld : current.Modifier == "RightAlt" && _altGrHeld;
+            JaraiKeyboard.SetHighlights([current.Key ?? ""], _positionErrorKey, current.Modifier, modifierHeld);
 
             if (_positionErrorKey != null)
                 StatusText.Text = "Wrong key — try again";
-            else if (current.Shifted && !_shiftHeld)
-                StatusText.Text = "Hold Shift, then press the highlighted key";
-            else if (current.Shifted && _shiftHeld)
-                StatusText.Text = "Shift held — now press the highlighted key";
+            else if (current.Modifier != null && !modifierHeld)
+                StatusText.Text = $"Hold {modName}, then press the highlighted key";
+            else if (current.Modifier != null && modifierHeld)
+                StatusText.Text = $"{modName} held — now press the highlighted key";
             else
                 StatusText.Text = "";
         }
 
-        // Appends one random (key, normal/shifted) target to the upcoming queue,
-        // avoiding repeating the same key+shift combo as the last item already queued.
-        // Only includes shifted chars that are Jarai (Khmer range) to avoid ASCII targets.
+        // Appends one random (key, layer) target to the upcoming queue, avoiding repeating
+        // the same key+modifier combo as the last item already queued. Only includes
+        // shifted/altGr chars that are Jarai (Khmer range) to avoid ASCII/punctuation targets.
         private void EnqueueNextPositionTarget()
         {
             if (_positionGroupKeys.Length == 0) return;
 
-            var candidates = new List<(string Key, bool Shifted, string Chars)>();
+            var candidates = new List<(string Key, string? Modifier, string Chars)>();
             foreach (var key in _positionGroupKeys)
             {
                 string norm = _jaraiLayoutService.GetNormalLabel(key);
                 if (!string.IsNullOrEmpty(norm))
-                    candidates.Add((key, false, norm));
+                    candidates.Add((key, null, norm));
                 string shift = _jaraiLayoutService.GetShiftedLabel(key);
                 if (IsJaraiChar(shift))
-                    candidates.Add((key, true, shift));
+                    candidates.Add((key, "LeftShift", shift));
+                string altGr = _jaraiLayoutService.GetAltGrLabel(key);
+                if (IsJaraiChar(altGr))
+                    candidates.Add((key, "RightAlt", altGr));
             }
 
             var last = _positionUpcoming.Count > 0 ? _positionUpcoming[^1] : default;
-            var others = new List<(string Key, bool Shifted, string Chars)>();
+            var others = new List<(string Key, string? Modifier, string Chars)>();
             foreach (var c in candidates)
-                if (!(c.Key == last.Key && c.Shifted == last.Shifted))
+                if (!(c.Key == last.Key && c.Modifier == last.Modifier))
                     others.Add(c);
             if (others.Count == 0) others = candidates;
 
@@ -440,14 +465,15 @@ namespace lamat
             }
             else if (_paragraphCharIdx < _paragraphCharSeq.Count)
             {
-                var (_, keyId, isShifted) = _paragraphCharSeq[_paragraphCharIdx];
-                string? shiftKey = isShifted ? "LeftShift" : null;
-                JaraiKeyboard.SetHighlights([keyId], null, shiftKey, _shiftHeld);
+                var (_, keyId, modifier) = _paragraphCharSeq[_paragraphCharIdx];
+                string modName = ModifierDisplayName(modifier);
+                bool modifierHeld = modifier == "LeftShift" ? _shiftHeld : modifier == "RightAlt" && _altGrHeld;
+                JaraiKeyboard.SetHighlights([keyId], null, modifier, modifierHeld);
                 StatusText.Text = _paragraphHasError
                     ? "Wrong key — try again"
-                    : isShifted
-                        ? (_shiftHeld ? "Shift held — now press the highlighted key"
-                                      : "Hold Shift, then press the highlighted key")
+                    : modifier != null
+                        ? (modifierHeld ? $"{modName} held — now press the highlighted key"
+                                        : $"Hold {modName}, then press the highlighted key")
                         : keyId == "Space"
                             ? "Press SPACE"
                             : "";
@@ -513,6 +539,11 @@ namespace lamat
                     _shiftHeld = true;
                     return;
                 }
+                if (k == Key.RightAlt)
+                {
+                    _altGrHeld = true;
+                    return;
+                }
 
                 _soundService.PlayClick();
 
@@ -548,9 +579,11 @@ namespace lamat
                     if (!ModifierKeyIds.IsModifier(keyId))
                     {
                         e.Handled = true;
-                        string ch = _shiftHeld
-                            ? _jaraiLayoutService.GetShiftedLabel(keyId)
-                            : _jaraiLayoutService.GetNormalLabel(keyId);
+                        string ch = _altGrHeld
+                            ? _jaraiLayoutService.GetAltGrLabel(keyId)
+                            : _shiftHeld
+                                ? _jaraiLayoutService.GetShiftedLabel(keyId)
+                                : _jaraiLayoutService.GetNormalLabel(keyId);
                         if (IsJaraiChar(ch))
                         {
                             _sentenceCurrentWord += ch;
@@ -580,6 +613,13 @@ namespace lamat
                     // Do NOT set e.Handled — Shift must reach the TextBox so Keyman can compose shifted chars.
                     return;
                 }
+                if (k == Key.RightAlt)
+                {
+                    _altGrHeld = true;
+                    RefreshUI();
+                    // Do NOT set e.Handled — AltGr must reach the TextBox so Keyman can compose the character.
+                    return;
+                }
 
                 if (k == Key.None) return;
                 string pressedId = KeyToKeyId(k);
@@ -592,9 +632,10 @@ namespace lamat
                 {
                     if (!_positionGroupKeys.Any(pk => string.Equals(pk, pressedId, StringComparison.OrdinalIgnoreCase))) return;
                     var current = _positionUpcoming.Count > 0 ? _positionUpcoming[0] : default;
+                    string? heldModifier = _shiftHeld ? "LeftShift" : _altGrHeld ? "RightAlt" : null;
                     if (current.Key != null
                         && string.Equals(pressedId, current.Key, StringComparison.OrdinalIgnoreCase)
-                        && _shiftHeld == current.Shifted)
+                        && heldModifier == current.Modifier)
                     {
                         _positionCorrect++;
                         _positionHistory.Insert(0, _positionUpcoming[0]);
@@ -603,6 +644,7 @@ namespace lamat
                         EnqueueNextPositionTarget();
                         _positionErrorKey = null;
                         _shiftHeld = Keyboard.IsKeyDown(Key.LeftShift) || Keyboard.IsKeyDown(Key.RightShift);
+                        _altGrHeld = Keyboard.IsKeyDown(Key.RightAlt);
                     }
                     else
                     {
@@ -626,9 +668,10 @@ namespace lamat
                     }
 
                     if (_paragraphCharIdx >= _paragraphCharSeq.Count) return;
-                    var (_, expectedParaKeyId, paraIsShifted) = _paragraphCharSeq[_paragraphCharIdx];
+                    var (_, expectedParaKeyId, expectedParaModifier) = _paragraphCharSeq[_paragraphCharIdx];
+                    string? paraHeldModifier = _shiftHeld ? "LeftShift" : _altGrHeld ? "RightAlt" : null;
                     if (string.Equals(pressedId, expectedParaKeyId, StringComparison.OrdinalIgnoreCase)
-                        && _shiftHeld == paraIsShifted)
+                        && paraHeldModifier == expectedParaModifier)
                     {
                         _paragraphHasError = false;
                         _paragraphCharIdx++;
@@ -636,6 +679,7 @@ namespace lamat
                         {
                             _paragraphLineComplete = true;
                             _shiftHeld = false;
+                            _altGrHeld = false;
                         }
                     }
                     else
@@ -650,9 +694,10 @@ namespace lamat
                 if (_currentMode == PracticeModeType.WordPractice && !_isAdvancing)
                 {
                     if (_wordCharIdx >= _wordCharSeq.Count) return;
-                    var (expectedChars, expectedKeyId, isShifted) = _wordCharSeq[_wordCharIdx];
+                    var (expectedChars, expectedKeyId, expectedModifier) = _wordCharSeq[_wordCharIdx];
+                    string? wordHeldModifier = _shiftHeld ? "LeftShift" : _altGrHeld ? "RightAlt" : null;
                     if (string.Equals(pressedId, expectedKeyId, StringComparison.OrdinalIgnoreCase)
-                        && _shiftHeld == isShifted)
+                        && wordHeldModifier == expectedModifier)
                     {
                         _wordHasError = false;
                         _displayHistory.Add(expectedChars);
@@ -663,6 +708,7 @@ namespace lamat
                         {
                             _isAdvancing = true;
                             _shiftHeld = false;
+                            _altGrHeld = false;
                             Dispatcher.BeginInvoke(new Action(() =>
                             {
                                 _keySessionService.AdvanceItem();
@@ -700,8 +746,11 @@ namespace lamat
                 Key.ImeProcessed => e.ImeProcessedKey,
                 _ => e.Key
             };
-            if (k != Key.LeftShift && k != Key.RightShift) return;
-            _shiftHeld = false;
+            bool changed = false;
+            if (k == Key.LeftShift || k == Key.RightShift) { _shiftHeld = false; changed = true; }
+            else if (k == Key.RightAlt) { _altGrHeld = false; changed = true; }
+            if (!changed) return;
+
             if (_currentMode == PracticeModeType.WordPractice ||
                 _currentMode == PracticeModeType.PositionPractice ||
                 _currentMode == PracticeModeType.ParagraphPractice)

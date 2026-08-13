@@ -4,5 +4,6 @@ namespace lamat.Models
     {
         public string Normal  { get; set; } = "";
         public string Shifted { get; set; } = "";
+        public string AltGr   { get; set; } = "";
     }
 }
