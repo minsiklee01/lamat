@@ -30,6 +30,13 @@ namespace lamat.Services
             return _items[CurrentItemIndex];
         }
 
+        // offset 0 = current item, negative = already-completed items, positive = upcoming items.
+        public KeySequencePracticeItem? PeekItem(int offset)
+        {
+            int idx = CurrentItemIndex + offset;
+            return idx >= 0 && idx < _items.Count ? _items[idx] : null;
+        }
+
         public KeyStep? GetCurrentStep()
         {
             var item = GetCurrentItem();

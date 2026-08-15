@@ -62,45 +62,11 @@ namespace lamat.Services
             return steps;
         }
 
-        // Converts arbitrary Jarai text (may contain literal spaces between words) into a
-        // per-physical-key sequence for character-by-character comparison, mirroring
-        // DeriveKeySteps but returning the matched chars alongside each key/modifier pair.
-        // Space bar has no layout entry (it isn't remapped by Keyman) — it always maps to " ".
-        // Returns null if a character in the text has no mapping.
-        public List<(string Chars, string KeyId, string? Modifier)>? DeriveCharKeySeq(string text)
-        {
-            var result = new List<(string, string, string?)>();
-            int i = 0;
-            while (i < text.Length)
-            {
-                if (text[i] == ' ')
-                {
-                    result.Add((" ", "Space", null));
-                    i++;
-                }
-                else if (i + 1 < text.Length && TryGetKeyForChar(text.Substring(i, 2), out var keyId2, out var modifier2))
-                {
-                    result.Add((text.Substring(i, 2), keyId2, modifier2));
-                    i += 2;
-                }
-                else if (TryGetKeyForChar(text.Substring(i, 1), out var keyId1, out var modifier1))
-                {
-                    result.Add((text.Substring(i, 1), keyId1, modifier1));
-                    i += 1;
-                }
-                else
-                {
-                    return null; // unmappable character
-                }
-            }
-            return result;
-        }
-
         // Khmer/Jarai coeng sign (្) — always pulls in the *following* consonant, forming one
         // visually-joined subscript stack (e.g. "ស្រ" = S + coeng + R renders as one shape).
-        public const char Coeng = '្';
+        private const char Coeng = '្';
 
-        public static bool IsCombiningMark(char c)
+        private static bool IsCombiningMark(char c)
         {
             var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
             return cat == System.Globalization.UnicodeCategory.NonSpacingMark
